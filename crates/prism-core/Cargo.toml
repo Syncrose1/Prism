@@ -10,3 +10,11 @@ serde.workspace = true
 toml.workspace = true
 regex.workspace = true
 tracing.workspace = true
+
+# Auth primitives. Deliberately small and well-known rather than a batteries
+# -included OTP crate: TOTP is ~40 lines and the RFC ships test vectors, so
+# hand-rolling it is both auditable and verifiable. See auth/totp.rs.
+hmac = "0.12"
+sha1 = "0.10"
+sha2 = "0.10"
+subtle = "2"

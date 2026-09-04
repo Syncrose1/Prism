@@ -11,6 +11,7 @@
 //! always arrive after the damage. Prism catches shape before it catches size.
 
 use crate::action;
+use crate::api::{SharedVitals, Vitals};
 use prism_core::config::Profile;
 use prism_core::governor::Governor;
 use prism_core::sensors::{memory, process};
@@ -26,10 +27,11 @@ pub struct Monitor {
     governor: Governor,
     storms: StormDetector,
     psi: memory::PsiTracker,
+    vitals: SharedVitals,
 }
 
 impl Monitor {
-    pub fn new(profile: Profile) -> Self {
+    pub fn new(profile: Profile, vitals: SharedVitals) -> Self {
         let (storms, skipped) = StormDetector::new(profile.storm);
         for reason in &skipped {
             info!(rule = %reason, "storm rule inactive on this host");
@@ -44,6 +46,7 @@ impl Monitor {
             governor: Governor::new(profile.governor),
             storms,
             psi: memory::PsiTracker::new(),
+            vitals,
         }
     }
 
@@ -72,6 +75,14 @@ impl Monitor {
                     .unwrap_or_default();
 
                 let headroom_mib = mem.honest_headroom_kb / 1024;
+                let tier_now = self.governor.tier();
+
+                // Publish before acting, so the dashboard reflects the state
+                // that motivated any intervention rather than its aftermath.
+                if let Ok(mut vitals) = self.vitals.write() {
+                    *vitals = Vitals::from_sample(&mem, stall.full, tier_now);
+                }
+
                 if let Some(tier) = self.governor.observe(stall.full, headroom_mib) {
                     warn!(
                         tier = tier.as_str(),

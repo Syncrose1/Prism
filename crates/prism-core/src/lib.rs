@@ -5,6 +5,7 @@
 //! between machines lives in [`config::Profile`] and is guarded by
 //! [`gate::Gate`] so it degrades rather than breaks on an unfamiliar host.
 
+pub mod auth;
 pub mod config;
 pub mod gate;
 pub mod governor;

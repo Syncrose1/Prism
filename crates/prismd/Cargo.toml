@@ -8,6 +8,14 @@ license.workspace = true
 prism-core = { path = "../prism-core" }
 anyhow.workspace = true
 regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 libc = "0.2"
+
+# Minimal runtime: no fs/process/time features pulled in beyond what the server
+# needs. The monitor loop stays synchronous on its own thread so pressure
+# handling never waits on an async runtime that is itself starved.
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal"] }
+axum = "0.8"
