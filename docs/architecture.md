@@ -462,6 +462,88 @@ reduce.
 
 ---
 
+## 5a. The shell: Prism as a cloud OS
+
+*Operator direction, 2026-09-04: "more like DSM for Synology than a typical UI.
+Maybe Prism OS makes more sense. I'm imagining a cloud OS… the OS layer is driven
+by the compute and files of the PC. Literally imagine a cloud PC."*
+
+This is a different product from a dashboard, and the distinction drives the
+design: **a dashboard is a page; an OS is a shell.** The health view stops being
+the product and becomes one app among several. What ships is a windowing
+environment whose applications are backed by the host's real compute, processes
+and filesystem.
+
+### Apps, not pages
+
+| App | Backed by |
+|---|---|
+| **Vitals** | §4.1 sensors — honest headroom, tiers, sparklines |
+| **Facets** | §4.3 supervisor — start/stop, live limit sliders, logs |
+| **Files** | §6 file manager — browse, preview, transfer |
+| **Timeline** | §4.5 recorder — incident playback |
+| **Settings** | host config, profiles, auth enrolment |
+
+Registration mirrors facets deliberately: an app is a manifest entry, so adding
+one is dropping a file rather than editing the shell. The operator has said they
+intend to expand the OS's actions over time, and that only stays cheap if the
+shell never needs to know what its apps are.
+
+### Constraints, in tension
+
+**Beautiful, lightweight, and windowed** do not naturally coexist — DSM-class
+shells are typically heavy. This holds only under discipline:
+
+- no UI framework; a hand-written window manager (drag, resize, z-order, snap,
+  minimise/maximise) is a few hundred lines and has no runtime cost
+- apps as inline DOM modules, not iframes — iframes buy isolation Prism does not
+  need and cost memory and styling coherence it does
+- everything embedded in the binary via `rust-embed`, no build step, no CDN
+- the shell must stay usable at Red tier, when the host is already struggling;
+  it is a rescue interface before it is a desktop
+
+**The desktop metaphor is wrong on a phone**, but phones are not the target.
+
+*Operator direction: "the main recipient of the best cloud OS experience [is] a
+laptop or a keyboard-attached tablet… other PCs and laptops get the best full
+experience. But phones will also benefit from file access or use c2 as a media
+server to stream a video to the phone."*
+
+So this is **desktop-first**, not responsive-equal. The windowed shell is the
+real product and should be designed for a pointer and a keyboard without
+compromise. Touch gets a deliberately reduced shell serving the two verticals
+that are genuinely valuable on a small screen — **Files** and **Media** — rather
+than a squeezed desktop nobody enjoys.
+
+| Device | Shell | Scope |
+|---|---|---|
+| Laptop, desktop, keyboard-attached tablet | Full windowed OS | Everything. The design target. |
+| Phone, bare tablet | Single-app fullscreen, app-switcher | Files, Media, and a read-only Vitals glance |
+
+Apps must therefore declare whether they have a touch presentation at all, and
+must not assume they own a window. An app with no touch mode simply does not
+appear in the phone launcher — better than shipping one that technically renders
+and is miserable to use.
+
+**Media is a first-class app**, added on this direction: `c2` as a media server
+streaming video to a phone. It is not part of the resilience story, but it is a
+large part of what makes the machine worth reaching from London, and it shares
+the file manager's plumbing — roots, previews, and HTTP range requests are the
+same machinery.
+
+### What makes it a *cloud* PC rather than a web page
+
+- **Session state lives on the host.** Window positions, open apps and layout
+  persist server-side, so the desktop follows the operator between phone,
+  laptop and tablet.
+- **Apps are views onto real resources**, not onto a database. Files is the
+  filesystem; Facets is cgroups; Vitals is PSI.
+- **It survives the machine it manages.** The shell must degrade gracefully when
+  the compositor is dead, the GPU is wedged, or memory is exhausted — the states
+  in which it matters most. A shell that needs a healthy host is decoration.
+
+---
+
 ## 6. Visual language
 
 Prism refracts state into spectrum. Hue is **semantic, never decorative** — it

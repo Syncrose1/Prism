@@ -1,0 +1,30 @@
+[Unit]
+Description=Sunshine (session-scoped)
+# Deliberately NOT bound to graphical-session.target. On this host that target is
+# inactive, and its wants include plasma-plasmashell and plasma-kded6 — kded6
+# being the ConflictKiller trigger documented in architecture.md §1.2. Binding to
+# it would either never start, or start the thing that storms the compositor.
+#
+# Lifecycle instead comes from the user manager: this unit starts with
+# default.target and dies with user@1000.service when the session ends.
+
+# The readiness gate below legitimately fails on early boot, before Hyprland has
+# run dbus-update-activation-environment. Without this, the default rate limit
+# (5 starts / 10 s) trips and systemd gives up permanently — turning a normal
+# startup race into a session with no streaming at all.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/sunshine
+Restart=always
+RestartSec=5
+
+# Readiness gate. Incident 2 §3.4: Restart=always without one converts "dead and
+# obviously broken" into "running and silently blind" — Sunshine reported active
+# for 19 minutes while unable to capture. Wait for a real Wayland socket before
+# claiming to have started.
+ExecStartPre=/bin/sh -c 'for i in $(seq 1 60); do [ -n "$WAYLAND_DISPLAY" ] && [ -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ] && exit 0; sleep 1; done; echo "no wayland socket after 60s" >&2; exit 1'
+
+[Install]
+WantedBy=default.target
