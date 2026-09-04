@@ -15,6 +15,7 @@ use axum::{
 };
 use prism_core::auth::{AuthOutcome, Authenticator, CodeOutcome, Sensitivity, totp};
 use prism_core::governor::Tier;
+use prism_core::sensors::disk::MountUsage;
 use prism_core::sensors::memory::MemorySnapshot;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, RwLock};
@@ -36,10 +37,26 @@ pub struct Vitals {
     pub swap_free_mib: u64,
     pub zram_cost_mib: u64,
     pub compression_ratio: Option<f64>,
+    /// Tightest watched filesystem, if disk is being sensed.
+    pub disk: Option<DiskVitals>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DiskVitals {
+    pub path: String,
+    pub total_mib: u64,
+    pub free_mib: u64,
+    pub used_pct: f64,
+    pub inodes_used_pct: f64,
 }
 
 impl Vitals {
-    pub fn from_sample(mem: &MemorySnapshot, stall_full: f64, tier: Tier) -> Self {
+    pub fn from_sample(
+        mem: &MemorySnapshot,
+        stall_full: f64,
+        tier: Tier,
+        disk: Option<&MountUsage>,
+    ) -> Self {
         Self {
             tier: tier.as_str().to_string(),
             stall_full,
@@ -51,6 +68,13 @@ impl Vitals {
             swap_free_mib: mem.swap_free_kb / 1024,
             zram_cost_mib: mem.zram_cost_kb / 1024,
             compression_ratio: mem.compression_ratio,
+            disk: disk.map(|d| DiskVitals {
+                path: d.path.display().to_string(),
+                total_mib: d.total_kb / 1024,
+                free_mib: d.available_mib(),
+                used_pct: d.used_pct(),
+                inodes_used_pct: d.inodes_used_pct(),
+            }),
         }
     }
 }

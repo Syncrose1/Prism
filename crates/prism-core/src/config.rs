@@ -140,6 +140,16 @@ pub struct GovernorConfig {
     pub amber_headroom_mib: u64,
     pub red_headroom_mib: u64,
     pub black_headroom_mib: u64,
+    /// Free-space floors for the tightest watched mount, in MiB.
+    ///
+    /// Absolute rather than percentage: a host writing multi-gigabyte model
+    /// files can sit at a comfortable-sounding 90% of a large disk and still
+    /// fail the next download. Defaults are sized for that workload.
+    pub amber_disk_free_mib: u64,
+    pub red_disk_free_mib: u64,
+    pub black_disk_free_mib: u64,
+    /// Filesystems to watch. Empty means use `sensors::disk::default_paths()`.
+    pub disk_paths: Vec<PathBuf>,
     /// How long a threshold must hold before the tier changes, in seconds.
     /// Prevents a single sampling artefact from killing a workload.
     pub sustain_secs: u64,
@@ -154,6 +164,13 @@ impl Default for GovernorConfig {
             amber_headroom_mib: 4096,
             red_headroom_mib: 1536,
             black_headroom_mib: 512,
+            // 20 GiB / 8 GiB / 2 GiB. Generous because a single language model
+            // download is routinely 10-40 GiB: warning at 2 GiB free would fire
+            // long after the write that fills the disk had already begun.
+            amber_disk_free_mib: 20480,
+            red_disk_free_mib: 8192,
+            black_disk_free_mib: 2048,
+            disk_paths: Vec::new(),
             sustain_secs: 10,
         }
     }

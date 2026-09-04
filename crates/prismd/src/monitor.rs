@@ -13,8 +13,8 @@
 use crate::action;
 use crate::api::{SharedVitals, Vitals};
 use prism_core::config::Profile;
-use prism_core::governor::Governor;
-use prism_core::sensors::{memory, process};
+use prism_core::governor::{Governor, Reading};
+use prism_core::sensors::{disk, memory, process};
 use prism_core::watchdog::storm::{StormAction, StormDetector, StormVerdict};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -28,6 +28,7 @@ pub struct Monitor {
     storms: StormDetector,
     psi: memory::PsiTracker,
     vitals: SharedVitals,
+    disk_paths: Vec<std::path::PathBuf>,
 }
 
 impl Monitor {
@@ -42,11 +43,26 @@ impl Monitor {
             "storm detector ready"
         );
 
+        let disk_paths = if profile.governor.disk_paths.is_empty() {
+            disk::default_paths()
+        } else {
+            profile.governor.disk_paths.clone()
+        };
+        for usage in disk::sample(&disk_paths) {
+            info!(
+                path = %usage.path.display(),
+                free_gib = format!("{:.1}", usage.available_mib() as f64 / 1024.0),
+                used_pct = format!("{:.0}%", usage.used_pct()),
+                "watching filesystem"
+            );
+        }
+
         Self {
             governor: Governor::new(profile.governor),
             storms,
             psi: memory::PsiTracker::new(),
             vitals,
+            disk_paths,
         }
     }
 
@@ -74,21 +90,32 @@ impl Monitor {
                     .and_then(|raw| self.psi.update(raw))
                     .unwrap_or_default();
 
-                let headroom_mib = mem.honest_headroom_kb / 1024;
+                let disks = disk::sample(&self.disk_paths);
+                let tightest = disk::tightest(&disks);
+                let reading = Reading {
+                    stall_full: stall.full,
+                    headroom_mib: mem.honest_headroom_kb / 1024,
+                    disk_free_mib: tightest.map(|d| d.available_mib()),
+                };
+
                 let tier_now = self.governor.tier();
 
                 // Publish before acting, so the dashboard reflects the state
                 // that motivated any intervention rather than its aftermath.
                 if let Ok(mut vitals) = self.vitals.write() {
-                    *vitals = Vitals::from_sample(&mem, stall.full, tier_now);
+                    *vitals = Vitals::from_sample(&mem, stall.full, tier_now, tightest);
                 }
 
-                if let Some(tier) = self.governor.observe(stall.full, headroom_mib) {
+                if let Some(tier) = self.governor.observe(&reading) {
                     warn!(
                         tier = tier.as_str(),
+                        driver = ?self.governor.driver(),
                         stall_full = format!("{:.1}%", stall.full * 100.0),
                         honest_headroom = format!("{:.2} GiB", mem.honest_headroom_gib()),
                         phantom = format!("{:.2} GiB", mem.phantom_headroom_kb() as f64 / 1_048_576.0),
+                        disk_free = tightest
+                            .map(|d| format!("{:.1} GiB on {}", d.available_mib() as f64 / 1024.0, d.path.display()))
+                            .unwrap_or_else(|| "not sensed".into()),
                         "pressure tier changed"
                     );
                 }
