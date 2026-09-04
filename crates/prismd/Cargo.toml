@@ -1,0 +1,13 @@
+[package]
+name = "prismd"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+prism-core = { path = "../prism-core" }
+anyhow.workspace = true
+regex.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+libc = "0.2"
