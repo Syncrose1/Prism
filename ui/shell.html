@@ -1,0 +1,840 @@
+<title>Prism OS</title>
+
+<style>
+/* ─────────────────────────────────────────────────────────────
+   PRISM OS
+   The only saturated colour in this interface encodes system
+   health. Everything else is greyscale. That is the whole rule.
+   ───────────────────────────────────────────────────────────── */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+:root {
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+
+  --void:      #050608;
+  --base:      #0a0c10;
+  --surface:   #0f1116;
+  --raised:    #14171e;
+  --line:      #1c2029;
+  --line-hi:   #2c313d;
+
+  --ink:       #e8ebf0;
+  --ink-dim:   #99a1ae;
+  --ink-faint: #5c6472;
+  --ink-ghost: #363c47;
+
+  --green: #4ade80;
+  --amber: #fbbf24;
+  --red:   #fb7185;
+
+  --tier:      var(--green);
+  --tier-glow: rgba(74,222,128,.16);
+  --tier-pos:  8%;
+
+  /* Wallpaper response to load.
+     As the machine degrades, decorative colour drains out of the desktop and
+     the tier colour washes in. By Black the wallpaper is fully greyscale and
+     the only chroma left on screen is the warning itself — the one-colour rule
+     enforcing itself rather than being a convention we merely assert. */
+  --desk-sat:  1;
+  --desk-tint: 0;
+  --desk-dim:  0;
+
+  --r: 4px;
+  --bar: 40px;
+  --dock: 62px;
+}
+:root[data-tier="amber"] { --tier: var(--amber); --tier-glow: rgba(251,191,36,.16); --tier-pos: 42%; --desk-sat: .55; --desk-tint: .16; --desk-dim: .12; }
+:root[data-tier="red"]   { --tier: var(--red);   --tier-glow: rgba(251,113,133,.18); --tier-pos: 74%; --desk-sat: .22; --desk-tint: .30; --desk-dim: .26; }
+:root[data-tier="black"] { --tier: var(--red);   --tier-glow: rgba(251,113,133,.30); --tier-pos: 95%; --desk-sat: 0;   --desk-tint: .42; --desk-dim: .40; }
+
+body {
+  margin: 0; height: 100vh; overflow: hidden;
+  background: var(--void); color: var(--ink);
+  font-family: var(--mono); font-size: 13px; line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+/* ── Desktop surface ─────────────────────────────────────────
+   A place, not a backdrop. Prismatic caustics: light bent
+   through glass, dark enough never to compete with content. */
+#desk {
+  position: fixed; top: var(--bar); left: 0; right: 0; bottom: var(--dock);
+  overflow: hidden; background: var(--void);
+}
+/* The wallpaper lives on its own layer so `filter` can desaturate it without
+   touching window content — windows must stay legible exactly when the desktop
+   is draining of colour. */
+#deskbg {
+  position: absolute; inset: 0; z-index: 0; pointer-events: none;
+  background:
+    radial-gradient(70% 55% at 18% 12%,  rgba(74,222,128,.07), transparent 62%),
+    radial-gradient(60% 50% at 82% 22%,  rgba(96,165,250,.06), transparent 60%),
+    radial-gradient(75% 60% at 62% 96%,  rgba(251,113,133,.05), transparent 65%),
+    radial-gradient(50% 40% at 38% 72%,  rgba(251,191,36,.035), transparent 60%),
+    linear-gradient(165deg, #0a0d13 0%, #070810 55%, #05060a 100%);
+  filter: saturate(var(--desk-sat)) brightness(calc(1 - var(--desk-dim)));
+  transition: filter 1.1s cubic-bezier(.4,0,.2,1);
+}
+/* A single refracted ray across the desktop — the prism, at room scale */
+#deskbg::before {
+  content: ""; position: absolute; inset: 0;
+  background: linear-gradient(103deg, transparent 34%, rgba(255,255,255,.028) 42%, transparent 49%);
+}
+/* Measurement grid */
+#deskbg::after {
+  content: ""; position: absolute; inset: 0;
+  background-image:
+    linear-gradient(rgba(255,255,255,.012) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,.012) 1px, transparent 1px);
+  background-size: 38px 38px;
+}
+/* Tier wash. Soft-light tints without flattening the caustics underneath. */
+#desktint {
+  position: absolute; inset: 0; z-index: 1; pointer-events: none;
+  background: var(--tier); opacity: var(--desk-tint); mix-blend-mode: soft-light;
+  transition: opacity 1.1s cubic-bezier(.4,0,.2,1), background .8s ease;
+}
+#grain {
+  position: fixed; inset: 0; pointer-events: none; z-index: 998; opacity: .15;
+  background-image: repeating-linear-gradient(0deg, rgba(255,255,255,.03) 0 1px, transparent 1px 3px);
+}
+#ambient {
+  position: fixed; inset: 0; pointer-events: none; z-index: 1;
+  background: radial-gradient(90% 55% at 50% 118%, var(--tier-glow), transparent 70%);
+  transition: background .9s ease;
+}
+
+/* ── Top bar ─────────────────────────────────────────────── */
+#topbar {
+  position: fixed; top: 0; left: 0; right: 0; height: var(--bar); z-index: 400;
+  display: flex; align-items: center; gap: 16px; padding: 0 13px;
+  background: linear-gradient(180deg, rgba(15,17,22,.92), rgba(10,12,16,.88));
+  backdrop-filter: blur(20px);
+  border-bottom: 1px solid var(--line);
+}
+.mark { display: flex; align-items: center; gap: 9px; }
+.mark .word { font-size: 11.5px; letter-spacing: .34em; text-transform: uppercase; font-weight: 500; }
+.host { color: var(--ink-faint); font-size: 11px; letter-spacing: .09em; padding-left: 16px; border-left: 1px solid var(--line); }
+.host b { color: var(--ink-dim); font-weight: 500; }
+.spacer { flex: 1; }
+
+.searchbtn {
+  display: flex; align-items: center; gap: 9px; padding: 4px 11px 4px 9px;
+  background: rgba(255,255,255,.02); border: 1px solid var(--line);
+  border-radius: var(--r); color: var(--ink-ghost); font: inherit; font-size: 11px;
+  cursor: pointer; transition: border-color .16s, color .16s, background .16s;
+}
+.searchbtn:hover { border-color: var(--line-hi); color: var(--ink-faint); background: rgba(255,255,255,.035); }
+.searchbtn kbd {
+  font: inherit; font-size: 10px; padding: 1px 5px; border-radius: 2px;
+  background: var(--raised); border: 1px solid var(--line-hi); color: var(--ink-faint);
+}
+
+.spectrum { display: flex; align-items: center; gap: 10px; }
+.band {
+  position: relative; width: 152px; height: 3px; border-radius: 2px; opacity: .5;
+  background: linear-gradient(90deg, var(--green) 0%, var(--green) 22%, var(--amber) 52%, var(--red) 88%);
+}
+.needle {
+  position: absolute; top: -4.5px; left: var(--tier-pos); width: 2px; height: 12px;
+  background: var(--ink); transform: translateX(-50%);
+  box-shadow: 0 0 0 2px var(--base), 0 0 10px var(--tier);
+  transition: left .7s cubic-bezier(.2,.8,.2,1);
+}
+.tier-word { min-width: 48px; font-size: 10.5px; letter-spacing: .18em; text-transform: uppercase; color: var(--tier); transition: color .5s; }
+.clock { color: var(--ink-dim); font-variant-numeric: tabular-nums; font-size: 12px; min-width: 66px; text-align: right; }
+
+/* ── Dock ────────────────────────────────────────────────── */
+#dock {
+  position: fixed; bottom: 0; left: 0; right: 0; height: var(--dock); z-index: 400;
+  display: flex; align-items: center; justify-content: center; gap: 5px;
+  background: linear-gradient(0deg, rgba(15,17,22,.94), rgba(10,12,16,.82));
+  backdrop-filter: blur(20px); border-top: 1px solid var(--line);
+}
+.dockitem {
+  position: relative; width: 42px; height: 42px; border-radius: 9px;
+  display: grid; place-items: center; cursor: pointer;
+  color: var(--ink-faint); border: 1px solid transparent;
+  transition: color .16s, background .16s, border-color .16s, transform .18s cubic-bezier(.2,.9,.3,1.4);
+}
+.dockitem:hover { color: var(--ink); background: var(--raised); border-color: var(--line); transform: translateY(-5px); }
+.dockitem svg { width: 18px; height: 18px; }
+/* Running indicator — the dock reports state, it is not just a launcher */
+.dockitem .run {
+  position: absolute; bottom: -5px; left: 50%; transform: translateX(-50%);
+  width: 3px; height: 3px; border-radius: 50%; background: var(--ink-ghost);
+  opacity: 0; transition: opacity .2s, width .2s, background .5s;
+}
+.dockitem.running .run { opacity: 1; background: var(--tier); }
+.dockitem.running.focused .run { width: 14px; border-radius: 2px; }
+.dockitem .tip {
+  position: absolute; bottom: 52px; white-space: nowrap; padding: 4px 9px;
+  background: var(--raised); border: 1px solid var(--line-hi); border-radius: var(--r);
+  font-size: 11px; letter-spacing: .07em; color: var(--ink-dim);
+  opacity: 0; pointer-events: none; transform: translateY(4px); transition: opacity .16s, transform .16s;
+}
+.dockitem:hover .tip { opacity: 1; transform: translateY(0); }
+.docksep { width: 1px; height: 26px; background: var(--line); margin: 0 6px; }
+
+/* ── Windows ─────────────────────────────────────────────── */
+.win {
+  position: absolute; display: flex; flex-direction: column; z-index: 10;
+  background: rgba(13,15,20,.86);
+  backdrop-filter: blur(22px) saturate(1.15);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  box-shadow: 0 26px 64px -18px rgba(0,0,0,.9), 0 0 0 1px rgba(0,0,0,.5);
+  animation: rise .34s cubic-bezier(.2,.9,.25,1) backwards;
+  min-width: 280px; min-height: 160px;
+}
+@keyframes rise { from { opacity: 0; transform: translateY(14px) scale(.97); } to { opacity: 1; transform: none; } }
+.win.min { display: none; }
+.win.max { border-radius: 0; }
+.win.focus { border-color: var(--line-hi); box-shadow: 0 32px 74px -18px rgba(0,0,0,.95), 0 0 0 1px var(--tier-glow); }
+.win.focus .bracket { opacity: .5; }
+.bracket { position: absolute; width: 9px; height: 9px; pointer-events: none; border-color: var(--tier); opacity: 0; transition: opacity .25s, border-color .5s; }
+.bracket.tl { top:-1px; left:-1px;  border-top:1.5px solid; border-left:1.5px solid;  border-radius:7px 0 0 0; }
+.bracket.tr { top:-1px; right:-1px; border-top:1.5px solid; border-right:1.5px solid; border-radius:0 7px 0 0; }
+.bracket.bl { bottom:-1px; left:-1px;  border-bottom:1.5px solid; border-left:1.5px solid;  border-radius:0 0 0 7px; }
+.bracket.br { bottom:-1px; right:-1px; border-bottom:1.5px solid; border-right:1.5px solid; border-radius:0 0 7px 0; }
+
+.tbar { display: flex; align-items: center; gap: 8px; height: 33px; padding: 0 9px; border-bottom: 1px solid var(--line); cursor: grab; flex: 0 0 auto; }
+.tbar:active { cursor: grabbing; }
+.tbar .name { font-size: 10px; letter-spacing: .2em; text-transform: uppercase; color: var(--ink-dim); }
+.tbar .meta { margin-left: auto; font-size: 10px; color: var(--ink-ghost); letter-spacing: .08em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wbtns { display: flex; gap: 5px; margin-left: 8px; flex: 0 0 auto; }
+.wb { width: 11px; height: 11px; border-radius: 50%; border: none; cursor: pointer; padding: 0; background: var(--line-hi); transition: background .15s; }
+.wb:hover { background: var(--ink-faint); }
+.wb.c:hover { background: var(--red); }
+
+.body { padding: 13px; overflow: auto; flex: 1 1 auto; }
+.body::-webkit-scrollbar { width: 10px; height: 10px; }
+.body::-webkit-scrollbar-thumb { background: var(--line-hi); border-radius: 9px; border: 3px solid transparent; background-clip: content-box; }
+.rz { position: absolute; right: 0; bottom: 0; width: 15px; height: 15px; cursor: nwse-resize; }
+.rz::after { content:""; position:absolute; right:3px; bottom:3px; width:6px; height:6px; border-right:1.5px solid var(--line-hi); border-bottom:1.5px solid var(--line-hi); }
+
+/* snap preview */
+#snap { position: absolute; z-index: 5; border: 1px solid var(--tier); background: var(--tier-glow); border-radius: 7px; display: none; pointer-events: none; transition: all .12s ease; }
+
+/* ── App content ─────────────────────────────────────────── */
+.hero .k { font-size: 9.5px; letter-spacing: .24em; text-transform: uppercase; color: var(--ink-ghost); }
+.hero .v { font-size: 44px; letter-spacing: -.03em; font-variant-numeric: tabular-nums; line-height: 1.05; margin-top: 2px; }
+.hero .v small { font-size: 14px; color: var(--ink-faint); letter-spacing: 0; margin-left: 5px; }
+.hero .sub { font-size: 11px; color: var(--ink-faint); margin-top: 3px; }
+.hero .sub b { color: var(--amber); font-weight: 500; }
+.spark { width: 100%; height: 38px; margin: 11px 0 13px; display: block; }
+.spark .fill { fill: var(--tier-glow); transition: fill .5s; }
+.spark .line { fill: none; stroke: var(--tier); stroke-width: 1.25; transition: stroke .5s; }
+.rows { display: grid; gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; }
+.row { display: flex; align-items: center; gap: 10px; padding: 6.5px 10px; background: var(--base); }
+.row .rk { color: var(--ink-faint); font-size: 11px; flex: 0 0 100px; }
+.row .rv { color: var(--ink); font-variant-numeric: tabular-nums; font-size: 12px; margin-left: auto; }
+.meter { flex: 1; height: 3px; background: var(--line-hi); border-radius: 2px; overflow: hidden; min-width: 30px; }
+.meter i { display: block; height: 100%; background: var(--ink-faint); border-radius: 2px; transition: width .6s cubic-bezier(.2,.8,.2,1); }
+.meter i.hot { background: var(--tier); }
+
+/* Files */
+.crumb { display: flex; align-items: center; gap: 5px; font-size: 11px; margin-bottom: 9px; flex-wrap: wrap; }
+.crumb a { color: var(--ink-dim); cursor: pointer; text-decoration: none; padding: 1px 4px; border-radius: 2px; }
+.crumb a:hover { color: var(--ink); background: var(--raised); }
+.crumb s { color: var(--ink-ghost); text-decoration: none; }
+.flist { display: grid; gap: 1px; }
+.f { display: flex; align-items: center; gap: 9px; padding: 5.5px 8px; border-radius: var(--r); cursor: pointer; transition: background .12s; }
+.f:hover { background: var(--raised); }
+.f.sel { background: var(--raised); box-shadow: inset 0 0 0 1px var(--line-hi); }
+.f .ic { width: 14px; color: var(--ink-ghost); flex: 0 0 14px; text-align: center; }
+.f.dir .ic { color: var(--ink-faint); }
+.f .nm { color: var(--ink-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.f.dir .nm { color: var(--ink); }
+.f .sz { margin-left: auto; color: var(--ink-ghost); font-size: 11px; font-variant-numeric: tabular-nums; flex: 0 0 auto; }
+.empty { color: var(--ink-ghost); font-size: 11.5px; padding: 18px 8px; text-align: center; }
+
+/* Preview window */
+.pv { display: grid; place-items: center; height: 100%; gap: 12px; }
+.pv .frame {
+  width: 100%; aspect-ratio: 4/3; border-radius: var(--r); border: 1px solid var(--line);
+  background:
+    radial-gradient(60% 60% at 32% 28%, rgba(74,222,128,.14), transparent 60%),
+    radial-gradient(55% 55% at 72% 66%, rgba(96,165,250,.14), transparent 60%),
+    radial-gradient(50% 50% at 50% 92%, rgba(251,113,133,.10), transparent 60%),
+    linear-gradient(150deg,#11141b,#080a0f);
+  display: grid; place-items: center; color: var(--ink-ghost); font-size: 10px; letter-spacing: .2em; text-transform: uppercase;
+}
+.pv .meta { font-size: 11px; color: var(--ink-faint); text-align: center; }
+.pv .meta b { color: var(--ink-dim); font-weight: 500; }
+
+/* Facets */
+.facet { border: 1px solid var(--line); border-radius: var(--r); padding: 10px 11px; margin-bottom: 8px; background: var(--base); }
+.facet .top { display: flex; align-items: center; gap: 8px; margin-bottom: 9px; }
+.facet .nm { color: var(--ink); font-size: 12px; }
+.dot { width: 5px; height: 5px; border-radius: 50%; flex: 0 0 5px; }
+.dot.up { background: var(--green); box-shadow: 0 0 7px var(--green); }
+.dot.down { background: var(--ink-ghost); }
+.facet .st { margin-left: auto; font-size: 10px; letter-spacing: .15em; text-transform: uppercase; color: var(--ink-ghost); }
+.bars { display: grid; gap: 5px; }
+.bar { display: flex; align-items: center; gap: 8px; }
+.bar .bl { font-size: 10px; color: var(--ink-ghost); letter-spacing: .1em; text-transform: uppercase; flex: 0 0 32px; }
+.bar .bv { font-size: 10.5px; color: var(--ink-faint); font-variant-numeric: tabular-nums; flex: 0 0 58px; text-align: right; }
+.acts { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
+.btn { font: inherit; font-size: 10.5px; letter-spacing: .11em; text-transform: uppercase; padding: 4px 10px; border-radius: 2px; cursor: pointer; background: transparent; border: 1px solid var(--line-hi); color: var(--ink-faint); transition: .15s; }
+.btn:hover { color: var(--ink); border-color: var(--ink-faint); background: var(--raised); }
+.btn.danger:hover { color: var(--red); border-color: var(--red); background: rgba(251,113,133,.07); }
+
+/* ── Command palette ─────────────────────────────────────── */
+#palette { position: fixed; inset: 0; z-index: 700; display: none; background: rgba(3,4,6,.55); backdrop-filter: blur(6px); }
+#palette.show { display: block; animation: fade .14s ease backwards; }
+@keyframes fade { from { opacity: 0 } to { opacity: 1 } }
+.pal {
+  position: absolute; top: 16%; left: 50%; transform: translateX(-50%);
+  width: min(540px, 90vw); background: rgba(16,19,25,.96); backdrop-filter: blur(24px);
+  border: 1px solid var(--line-hi); border-radius: 9px; overflow: hidden;
+  box-shadow: 0 30px 80px -20px rgba(0,0,0,.95);
+  animation: drop .18s cubic-bezier(.2,.9,.25,1) backwards;
+}
+@keyframes drop { from { opacity: 0; transform: translateX(-50%) translateY(-10px) scale(.98); } to { opacity: 1; transform: translateX(-50%); } }
+.pal input {
+  width: 100%; padding: 15px 16px; font: inherit; font-size: 14px;
+  background: transparent; border: none; border-bottom: 1px solid var(--line); color: var(--ink); outline: none;
+}
+.pal input::placeholder { color: var(--ink-ghost); }
+.pal .list { max-height: 320px; overflow: auto; padding: 5px; }
+.pal .it { display: flex; align-items: center; gap: 11px; padding: 8px 11px; border-radius: var(--r); cursor: pointer; color: var(--ink-dim); }
+.pal .it .ik { width: 15px; color: var(--ink-ghost); flex: 0 0 15px; text-align: center; }
+.pal .it .ihint { margin-left: auto; font-size: 10px; color: var(--ink-ghost); letter-spacing: .1em; text-transform: uppercase; }
+.pal .it.on { background: var(--raised); color: var(--ink); box-shadow: inset 0 0 0 1px var(--line-hi); }
+
+/* ── Context menu ────────────────────────────────────────── */
+#ctx { position: fixed; z-index: 750; display: none; min-width: 190px; padding: 5px; background: rgba(16,19,25,.97); backdrop-filter: blur(20px); border: 1px solid var(--line-hi); border-radius: 6px; box-shadow: 0 18px 44px -12px rgba(0,0,0,.9); }
+#ctx.show { display: block; animation: fade .1s ease backwards; }
+#ctx .ci { display: flex; align-items: center; gap: 10px; padding: 6px 10px; border-radius: 3px; cursor: pointer; color: var(--ink-dim); font-size: 12px; }
+#ctx .ci:hover { background: var(--raised); color: var(--ink); }
+#ctx .cs { height: 1px; background: var(--line); margin: 4px 6px; }
+
+/* ── Critical Functions Mode ─────────────────────────────── */
+#critical { position: fixed; inset: 0; z-index: 800; display: none; background: var(--void); padding: 42px 28px; overflow: auto; }
+#critical.show { display: block; animation: fade .2s ease backwards; }
+#critical h2 { font-size: 12px; letter-spacing: .3em; text-transform: uppercase; color: var(--red); margin: 0 0 5px; }
+#critical .why { color: var(--ink-faint); font-size: 12px; margin: 0 0 24px; max-width: 64ch; line-height: 1.65; }
+#critical .why b { color: var(--ink-dim); font-weight: 500; }
+.ctable { width: 100%; border-collapse: collapse; max-width: 740px; font-size: 12px; }
+.ctable th { text-align: left; font-weight: 400; color: var(--ink-ghost); font-size: 10px; letter-spacing: .17em; text-transform: uppercase; padding: 0 10px 7px; border-bottom: 1px solid var(--line); }
+.ctable td { padding: 8px 10px; border-bottom: 1px solid var(--line); color: var(--ink-dim); }
+.ctable td.n { text-align: right; font-variant-numeric: tabular-nums; color: var(--ink); }
+.prot { color: var(--ink-ghost); font-size: 11px; }
+
+/* ── Simulator ───────────────────────────────────────────── */
+#sim { position: fixed; right: 13px; bottom: calc(var(--dock) + 12px); z-index: 900; display: flex; align-items: center; gap: 6px; padding: 6px 8px; background: rgba(20,23,30,.92); backdrop-filter: blur(14px); border: 1px solid var(--line-hi); border-radius: var(--r); }
+#sim .lbl { font-size: 9px; letter-spacing: .18em; text-transform: uppercase; color: var(--ink-ghost); margin-right: 2px; }
+#sim button { font: inherit; font-size: 10px; letter-spacing: .09em; text-transform: uppercase; padding: 3px 8px; border-radius: 2px; cursor: pointer; background: transparent; border: 1px solid var(--line-hi); color: var(--ink-faint); }
+#sim button:hover { color: var(--ink); }
+#sim button.sel { color: var(--void); background: var(--ink); border-color: var(--ink); }
+
+@media (max-width: 760px) {
+  .host, .searchbtn span, .spectrum .lbl { display: none; }
+  .band { width: 74px; }
+}
+</style>
+
+<div id="grain"></div>
+<div id="ambient"></div>
+
+<div id="topbar">
+  <div class="mark">
+    <svg width="24" height="18" viewBox="0 0 24 18" fill="none" aria-hidden="true">
+      <path d="M0 8.2 H7.4" stroke="#e8ebf0" stroke-width="1.1"/>
+      <path d="M8 14.4 L13.4 3.2 L18.8 14.4 Z" stroke="#5c6472" stroke-width="1.1" fill="none"/>
+      <path d="M18.2 11.1 H24" stroke="#4ade80" stroke-width="1.1"/>
+      <path d="M18.4 12.5 H24" stroke="#fbbf24" stroke-width="1.1"/>
+      <path d="M18.6 13.9 H24" stroke="#fb7185" stroke-width="1.1"/>
+    </svg>
+    <span class="word">Prism</span>
+  </div>
+  <div class="host"><b>c2</b> · desktop-cachy02</div>
+  <div class="spacer"></div>
+  <button class="searchbtn" id="openPal"><span>Search apps, files, actions</span><kbd>⌘K</kbd></button>
+  <div class="spectrum">
+    <div class="band"><div class="needle"></div></div>
+    <span class="tier-word" id="tierWord">Green</span>
+  </div>
+  <div class="clock" id="clock">00:00:00</div>
+</div>
+
+<main id="desk">
+  <div id="deskbg"></div>
+  <div id="desktint"></div>
+  <div id="snap"></div>
+</main>
+
+<div id="dock"></div>
+
+<div id="palette"><div class="pal">
+  <input id="palInput" placeholder="Search apps, files and actions…" autocomplete="off" spellcheck="false">
+  <div class="list" id="palList"></div>
+</div></div>
+
+<div id="ctx"></div>
+
+<div id="critical">
+  <h2>Critical Functions</h2>
+  <p class="why">
+    Prism has de-escalated. The desktop is suspended and thumbnailing, transcoding and live
+    telemetry are stopped, so the machine keeps enough headroom to stay reachable.
+    Driver: <b>honest headroom below 1.5 GiB</b>. This view needs no JavaScript and is always
+    reachable at <b>/rescue</b>, at any tier.
+  </p>
+  <table class="ctable">
+    <tr><th>PID</th><th>Process</th><th>RSS</th><th></th></tr>
+    <tr><td class="n">2364779</td><td>python3 · ComfyUI</td><td class="n">14.3 GiB</td><td><button class="btn danger">Kill</button></td></tr>
+    <tr><td class="n">2327</td><td>zen-bin</td><td class="n">0.6 GiB</td><td><button class="btn danger">Kill</button></td></tr>
+    <tr><td class="n">2710364</td><td>qs · quickshell</td><td class="n">0.5 GiB</td><td><button class="btn danger">Kill</button></td></tr>
+    <tr><td class="n">2710314</td><td>Hyprland</td><td class="n">0.2 GiB</td><td><span class="prot">protected</span></td></tr>
+    <tr><td class="n">24570</td><td>tailscaled</td><td class="n">0.1 GiB</td><td><span class="prot">protected</span></td></tr>
+  </table>
+</div>
+
+<div id="sim">
+  <span class="lbl">Simulate</span>
+  <button data-t="green" class="sel">Green</button>
+  <button data-t="amber">Amber</button>
+  <button data-t="red">Red</button>
+  <button data-t="black">Black</button>
+</div>
+
+<script>
+(() => {
+const root = document.documentElement, desk = document.getElementById('desk');
+const $ = s => document.querySelector(s);
+
+/* ── clock ───────────────────────────────────────────────── */
+const clock = $('#clock');
+setInterval(() => clock.textContent = new Date().toLocaleTimeString('en-GB'), 1000);
+clock.textContent = new Date().toLocaleTimeString('en-GB');
+
+/* ── icons ───────────────────────────────────────────────── */
+const ICON = {
+  vitals:  '<path d="M3 12h4l2.5-7 4 14 2.5-7h5"/>',
+  files:   '<path d="M3 7a2 2 0 012-2h4l2 2.5h8a2 2 0 012 2V17a2 2 0 01-2 2H5a2 2 0 01-2-2z"/>',
+  facets:  '<rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/><path d="M6.5 7h.01M6.5 17h.01"/>',
+  media:   '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M10.5 9.5l4.5 2.5-4.5 2.5z"/>',
+  timeline:'<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
+  preview: '<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="M4 17l5-4 4 3 3-2 4 3"/>'
+};
+const svg = k => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${ICON[k]}</svg>`;
+
+/* ── virtual filesystem ──────────────────────────────────── */
+const FS = {
+  '': { dirs: ['ComfyUI', 'llama.cpp', 'Documents', 'Prism'], files: [['.bashrc','3.1 KB','txt'],['notes.md','12 KB','txt']] },
+  'ComfyUI': { dirs: ['output','models','custom_nodes'], files: [['run_nvidia_gpu.sh','1.2 KB','txt']] },
+  'ComfyUI/output': { dirs: ['2026-09-04','upscaled'], files: [
+    ['render_00417.png','4.2 MB','img'],['render_00416.png','3.9 MB','img'],
+    ['render_00415.png','4.1 MB','img'],['turntable_final.mp4','218 MB','vid'],
+    ['workflow_api.json','31 KB','txt']] },
+  'ComfyUI/output/2026-09-04': { dirs: [], files: [['batch_001.png','3.7 MB','img'],['batch_002.png','3.8 MB','img']] },
+  'ComfyUI/output/upscaled': { dirs: [], files: [['render_00417_4x.png','48 MB','img']] },
+  'ComfyUI/models': { dirs: [], files: [['flux1-dev.safetensors','23.8 GB','bin'],['sdxl_base.safetensors','6.9 GB','bin']] },
+  'ComfyUI/custom_nodes': { dirs: [], files: [] },
+  'llama.cpp': { dirs: [], files: [['llama-server','12 MB','bin'],['qwen3-32b-q4.gguf','19.4 GB','bin']] },
+  'Documents': { dirs: [], files: [['rota_september.pdf','840 KB','pdf'],['handover.md','8 KB','txt']] },
+  'Prism': { dirs: [], files: [['architecture.md','21 KB','txt'],['Cargo.toml','620 B','txt']] }
+};
+const FICON = { img:'▤', vid:'▶', txt:'≡', pdf:'▦', bin:'◆' };
+
+/* ── window manager ──────────────────────────────────────── */
+let zTop = 10, seq = 0;
+const wins = new Map();
+
+function makeWindow({ id, app, title, meta = '', w = 380, h = 320, x, y, content }) {
+  const wid = id || `${app}-${++seq}`;
+  if (wins.has(wid)) { focus(wins.get(wid)); return wins.get(wid); }
+
+  // Cascade rather than tile — overlapping windows are what make it read
+  // as a desktop the user arranged, not a dashboard someone laid out.
+  const n = wins.size;
+  x = x ?? 40 + (n % 6) * 34;
+  y = y ?? 26 + (n % 6) * 30;
+
+  const el = document.createElement('section');
+  el.className = 'win';
+  el.style.cssText = `left:${x}px;top:${y}px;width:${w}px;height:${h}px;z-index:${++zTop}`;
+  el.innerHTML =
+    `<i class="bracket tl"></i><i class="bracket tr"></i><i class="bracket bl"></i><i class="bracket br"></i>
+     <header class="tbar"><span class="name">${title}</span><span class="meta">${meta}</span>
+       <span class="wbtns"><button class="wb n" title="Minimise"></button><button class="wb m" title="Maximise"></button><button class="wb c" title="Close"></button></span>
+     </header>
+     <div class="body"></div><div class="rz"></div>`;
+  el.querySelector('.body').append(content);
+  desk.append(el);
+
+  const win = { id: wid, app, el, restore: null };
+  wins.set(wid, win);
+  wire(win);
+  focus(win);
+  syncDock();
+  return win;
+}
+
+function focus(win) {
+  wins.forEach(w => w.el.classList.remove('focus'));
+  win.el.classList.add('focus');
+  win.el.classList.remove('min');
+  win.el.style.zIndex = ++zTop;
+  syncDock();
+}
+
+function close(win) { win.el.remove(); wins.delete(win.id); syncDock(); }
+
+function toggleMax(win) {
+  const el = win.el;
+  if (el.classList.contains('max')) {
+    Object.assign(el.style, win.restore);
+    el.classList.remove('max');
+  } else {
+    win.restore = { left: el.style.left, top: el.style.top, width: el.style.width, height: el.style.height };
+    Object.assign(el.style, { left: '0px', top: '0px', width: '100%', height: '100%' });
+    el.classList.add('max');
+  }
+}
+
+function wire(win) {
+  const el = win.el, bar = el.querySelector('.tbar'), snap = $('#snap');
+  el.addEventListener('pointerdown', () => focus(win));
+  el.querySelector('.wb.c').onclick = e => { e.stopPropagation(); close(win); };
+  el.querySelector('.wb.n').onclick = e => { e.stopPropagation(); el.classList.add('min'); syncDock(); };
+  el.querySelector('.wb.m').onclick = e => { e.stopPropagation(); toggleMax(win); };
+  bar.addEventListener('dblclick', () => toggleMax(win));
+
+  bar.addEventListener('pointerdown', e => {
+    if (e.target.closest('.wb')) return;
+    if (el.classList.contains('max')) toggleMax(win);
+    const d = desk.getBoundingClientRect(), r = el.getBoundingClientRect();
+    const ox = e.clientX - r.left, oy = e.clientY - r.top;
+    bar.setPointerCapture(e.pointerId);
+    let zone = null;
+
+    const move = ev => {
+      const x = ev.clientX - d.left - ox, y = ev.clientY - d.top - oy;
+      el.style.left = Math.max(-r.width + 60, Math.min(x, d.width - 60)) + 'px';
+      el.style.top  = Math.max(0, Math.min(y, d.height - 34)) + 'px';
+
+      // Edge snapping — halves and full, like a real tiling-capable WM
+      const ex = ev.clientX - d.left, ey = ev.clientY - d.top;
+      zone = ex < 26 ? 'l' : ex > d.width - 26 ? 'r' : ey < 12 ? 'max' : null;
+      if (zone) {
+        snap.style.display = 'block';
+        const box = zone === 'l' ? [0,0,d.width/2,d.height]
+                  : zone === 'r' ? [d.width/2,0,d.width/2,d.height]
+                  : [0,0,d.width,d.height];
+        Object.assign(snap.style, { left:box[0]+'px', top:box[1]+'px', width:box[2]+'px', height:box[3]+'px' });
+      } else snap.style.display = 'none';
+    };
+    const up = () => {
+      bar.removeEventListener('pointermove', move);
+      bar.removeEventListener('pointerup', up);
+      snap.style.display = 'none';
+      if (zone) {
+        const d2 = desk.getBoundingClientRect();
+        const box = zone === 'l' ? [0,0,d2.width/2,d2.height]
+                  : zone === 'r' ? [d2.width/2,0,d2.width/2,d2.height]
+                  : [0,0,d2.width,d2.height];
+        Object.assign(el.style, { left:box[0]+'px', top:box[1]+'px', width:box[2]+'px', height:box[3]+'px' });
+      }
+    };
+    bar.addEventListener('pointermove', move);
+    bar.addEventListener('pointerup', up);
+  });
+
+  const rz = el.querySelector('.rz');
+  rz.addEventListener('pointerdown', e => {
+    e.stopPropagation();
+    const r = el.getBoundingClientRect(), sx = e.clientX, sy = e.clientY;
+    rz.setPointerCapture(e.pointerId);
+    const move = ev => {
+      el.style.width  = Math.max(280, r.width  + ev.clientX - sx) + 'px';
+      el.style.height = Math.max(160, r.height + ev.clientY - sy) + 'px';
+    };
+    const up = () => { rz.removeEventListener('pointermove', move); rz.removeEventListener('pointerup', up); };
+    rz.addEventListener('pointermove', move);
+    rz.addEventListener('pointerup', up);
+  });
+}
+
+/* ── apps ────────────────────────────────────────────────── */
+const el = (html) => { const t = document.createElement('div'); t.innerHTML = html; return t; };
+
+function appVitals() {
+  const d = el(`
+    <div class="hero">
+      <div class="k">Honest headroom</div>
+      <div class="v"><span data-head>34.3</span><small>GiB</small></div>
+      <div class="sub"><b data-phantom>6.4 GiB</b> of advertised headroom cannot exist</div>
+    </div>
+    <svg class="spark" viewBox="0 0 300 38" preserveAspectRatio="none"><path class="fill"></path><path class="line"></path></svg>
+    <div class="rows">
+      <div class="row"><span class="rk">Memory stall</span><span class="meter"><i data-stallbar style="width:2%"></i></span><span class="rv" data-stall>0.1%</span></div>
+      <div class="row"><span class="rk">RAM</span><span class="meter"><i data-rambar style="width:14%"></i></span><span class="rv">4.4 / 30.7 GiB</span></div>
+      <div class="row"><span class="rk">zram swap</span><span class="meter"><i style="width:9%"></i></span><span class="rv">1.4 / 15.4 GiB</span></div>
+      <div class="row"><span class="rk">Compression</span><span class="rv">2.17 ×</span></div>
+      <div class="row"><span class="rk">Disk /</span><span class="meter"><i style="width:94%"></i></span><span class="rv">43.7 GiB free</span></div>
+      <div class="row"><span class="rk">GPU</span><span class="meter"><i style="width:7%"></i></span><span class="rv">0.9 / 12 GiB</span></div>
+    </div>`);
+  vitalsPanels.push(d);
+  paintVitals(d);
+  return d;
+}
+
+function appFiles(startPath = '') {
+  const d = el(`<div class="crumb"></div><div class="flist"></div>`);
+  let path = startPath;
+
+  function render() {
+    const node = FS[path] || { dirs: [], files: [] };
+    const crumb = d.querySelector('.crumb'), list = d.querySelector('.flist');
+    const parts = path ? path.split('/') : [];
+
+    crumb.innerHTML = '';
+    const home = document.createElement('a'); home.textContent = 'home';
+    home.onclick = () => { path = ''; render(); };
+    crumb.append(home);
+    parts.forEach((p, i) => {
+      const s = document.createElement('s'); s.textContent = '/'; crumb.append(s);
+      const a = document.createElement('a'); a.textContent = p;
+      a.onclick = () => { path = parts.slice(0, i + 1).join('/'); render(); };
+      crumb.append(a);
+    });
+
+    list.innerHTML = '';
+    if (!node.dirs.length && !node.files.length) {
+      list.innerHTML = '<div class="empty">empty directory</div>';
+    }
+    node.dirs.forEach(name => {
+      const row = document.createElement('div');
+      row.className = 'f dir';
+      row.innerHTML = `<span class="ic">▸</span><span class="nm"></span><span class="sz">—</span>`;
+      row.querySelector('.nm').textContent = name;
+      row.onclick = () => { path = path ? path + '/' + name : name; render(); };
+      list.append(row);
+    });
+    node.files.forEach(([name, size, kind]) => {
+      const row = document.createElement('div');
+      row.className = 'f';
+      row.innerHTML = `<span class="ic">${FICON[kind] || '◆'}</span><span class="nm"></span><span class="sz">${size}</span>`;
+      row.querySelector('.nm').textContent = name;
+      row.onclick = () => { list.querySelectorAll('.f').forEach(f => f.classList.remove('sel')); row.classList.add('sel'); };
+      // Double-click opens a real window — this is the difference between
+      // a list of filenames and a filesystem you can operate.
+      row.ondblclick = () => openPreview(name, size, kind);
+      list.append(row);
+    });
+
+    const win = d.closest('.win');
+    if (win) win.querySelector('.meta').textContent =
+      (path || 'home') + ' · ' + (node.dirs.length + node.files.length) + ' items';
+  }
+  render();
+  return d;
+}
+
+function openPreview(name, size, kind) {
+  const label = { img:'Image', vid:'Video', txt:'Text', pdf:'Document', bin:'Binary' }[kind] || 'File';
+  const content = el(`<div class="pv">
+      <div class="frame">${kind === 'img' || kind === 'vid' ? label + ' preview' : 'No preview'}</div>
+      <div class="meta"><b>${name}</b><br>${label} · ${size}</div>
+    </div>`);
+  makeWindow({ app: 'preview', title: 'Preview', meta: name, w: 340, h: 320, content });
+}
+
+function appFacets() {
+  return el(`
+    <div class="facet">
+      <div class="top"><span class="dot up"></span><span class="nm">ComfyUI</span><span class="st">Running</span></div>
+      <div class="bars">
+        <div class="bar"><span class="bl">RAM</span><span class="meter"><i class="hot" style="width:47%"></i></span><span class="bv">14.3 GiB</span></div>
+        <div class="bar"><span class="bl">Swap</span><span class="meter"><i style="width:11%"></i></span><span class="bv">0.7 / 6 GiB</span></div>
+        <div class="bar"><span class="bl">VRAM</span><span class="meter"><i style="width:16%"></i></span><span class="bv">1.9 GiB</span></div>
+      </div>
+      <div class="acts"><button class="btn">Limits</button><button class="btn">Logs</button><button class="btn danger">Stop</button></div>
+    </div>
+    <div class="facet">
+      <div class="top"><span class="dot down"></span><span class="nm">llama.cpp</span><span class="st">Stopped</span></div>
+      <div class="bars"><div class="bar"><span class="bl">RAM</span><span class="meter"><i style="width:0%"></i></span><span class="bv">—</span></div></div>
+      <div class="acts"><button class="btn">Start</button><button class="btn">Limits</button></div>
+    </div>`);
+}
+
+function appMedia() {
+  return el(`<div class="crumb"><a>Library</a><s>/</s><a>Films</a></div>
+    <div class="flist">
+      <div class="f"><span class="ic">▶</span><span class="nm">turntable_final.mp4</span><span class="sz">218 MB</span></div>
+      <div class="f"><span class="ic">▶</span><span class="nm">timelapse_batch.mp4</span><span class="sz">1.4 GB</span></div>
+    </div>
+    <div class="pv" style="margin-top:14px">
+      <div class="frame">Transcode · h264_nvenc</div>
+      <div class="meta">Hardware path on the RTX 3060 · streams to phone over the tailnet</div>
+    </div>`);
+}
+
+function appTimeline() {
+  return el(`<div class="rows">
+      <div class="row"><span class="rk">23:11:26</span><span class="rv" style="color:var(--ink-dim)">kill refused · pid 1 protected</span></div>
+      <div class="row"><span class="rk">21:40:55</span><span class="rv" style="color:var(--red)">session lost · kill(-1) from test suite</span></div>
+      <div class="row"><span class="rk">21:26:00</span><span class="rv" style="color:var(--ink-dim)">log mirror installed</span></div>
+      <div class="row"><span class="rk">19:30:15</span><span class="rv" style="color:var(--red)">Hyprland SIGSEGV · dwindle layout</span></div>
+      <div class="row"><span class="rk">19:10:37</span><span class="rv" style="color:var(--amber)">zram resized 46 → 15.4 GiB</span></div>
+    </div>`);
+}
+
+const APPS = {
+  vitals:   { title: 'Vitals',   w: 348, h: 400, make: appVitals },
+  files:    { title: 'Files',    w: 396, h: 330, make: () => appFiles('ComfyUI/output') },
+  facets:   { title: 'Facets',   w: 392, h: 286, make: appFacets },
+  media:    { title: 'Media',    w: 400, h: 360, make: appMedia },
+  timeline: { title: 'Timeline', w: 420, h: 240, make: appTimeline }
+};
+
+function launch(app) {
+  const a = APPS[app]; if (!a) return;
+  const existing = [...wins.values()].find(w => w.app === app);
+  if (existing) { focus(existing); return; }
+  makeWindow({ app, title: a.title, w: a.w, h: a.h, content: a.make() });
+}
+
+/* ── dock ────────────────────────────────────────────────── */
+const dock = $('#dock');
+Object.keys(APPS).forEach(app => {
+  const b = document.createElement('div');
+  b.className = 'dockitem'; b.dataset.app = app;
+  b.innerHTML = svg(app) + `<span class="run"></span><span class="tip">${APPS[app].title}</span>`;
+  b.onclick = () => {
+    const open = [...wins.values()].filter(w => w.app === app);
+    if (!open.length) return launch(app);
+    const focused = open.find(w => w.el.classList.contains('focus') && !w.el.classList.contains('min'));
+    if (focused) { focused.el.classList.add('min'); syncDock(); } else focus(open[0]);
+  };
+  dock.append(b);
+});
+
+function syncDock() {
+  dock.querySelectorAll('.dockitem').forEach(b => {
+    const open = [...wins.values()].filter(w => w.app === b.dataset.app);
+    b.classList.toggle('running', open.length > 0);
+    b.classList.toggle('focused', open.some(w => w.el.classList.contains('focus') && !w.el.classList.contains('min')));
+  });
+}
+
+/* ── command palette ─────────────────────────────────────── */
+const pal = $('#palette'), palInput = $('#palInput'), palList = $('#palList');
+let palItems = [], palSel = 0;
+
+function buildPalette(q = '') {
+  const items = [];
+  Object.entries(APPS).forEach(([k, a]) =>
+    items.push({ ic: '◧', label: a.title, hint: 'App', run: () => launch(k) }));
+  Object.keys(FS).forEach(p =>
+    items.push({ ic: '▸', label: p ? 'home/' + p : 'home', hint: 'Folder',
+      run: () => makeWindow({ app:'files', title:'Files', w:396, h:330, content: appFiles(p) }) }));
+  ['green','amber','red','black'].forEach(t =>
+    items.push({ ic: '◈', label: `Simulate ${t} tier`, hint: 'Action', run: () => setTier(t) }));
+  items.push({ ic: '⊘', label: 'Close all windows', hint: 'Action', run: () => [...wins.values()].forEach(close) });
+
+  const needle = q.toLowerCase();
+  palItems = items.filter(i => i.label.toLowerCase().includes(needle)).slice(0, 40);
+  palSel = 0;
+  palList.innerHTML = '';
+  palItems.forEach((it, i) => {
+    const d = document.createElement('div');
+    d.className = 'it' + (i === 0 ? ' on' : '');
+    d.innerHTML = `<span class="ik">${it.ic}</span><span class="lb"></span><span class="ihint">${it.hint}</span>`;
+    d.querySelector('.lb').textContent = it.label;
+    d.onclick = () => { it.run(); closePal(); };
+    d.onmouseenter = () => { palSel = i; paintSel(); };
+    palList.append(d);
+  });
+}
+function paintSel() { [...palList.children].forEach((c, i) => c.classList.toggle('on', i === palSel)); }
+function openPal() { pal.classList.add('show'); palInput.value = ''; buildPalette(); palInput.focus(); }
+function closePal() { pal.classList.remove('show'); }
+$('#openPal').onclick = openPal;
+pal.onclick = e => { if (e.target === pal) closePal(); };
+palInput.oninput = () => buildPalette(palInput.value);
+palInput.onkeydown = e => {
+  if (e.key === 'ArrowDown') { palSel = Math.min(palSel + 1, palItems.length - 1); paintSel(); e.preventDefault(); }
+  if (e.key === 'ArrowUp')   { palSel = Math.max(palSel - 1, 0); paintSel(); e.preventDefault(); }
+  if (e.key === 'Enter' && palItems[palSel]) { palItems[palSel].run(); closePal(); }
+  if (e.key === 'Escape') closePal();
+};
+addEventListener('keydown', e => {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); openPal(); }
+  if (e.key === 'Escape') { closePal(); hideCtx(); }
+});
+
+/* ── context menu ────────────────────────────────────────── */
+const ctx = $('#ctx');
+function hideCtx() { ctx.classList.remove('show'); }
+desk.addEventListener('contextmenu', e => {
+  if (e.target.closest('.win')) return;
+  e.preventDefault();
+  ctx.innerHTML = '';
+  const add = (label, fn) => {
+    const d = document.createElement('div'); d.className = 'ci'; d.textContent = label;
+    d.onclick = () => { fn(); hideCtx(); }; ctx.append(d);
+  };
+  Object.entries(APPS).forEach(([k, a]) => add('Open ' + a.title, () => launch(k)));
+  const s = document.createElement('div'); s.className = 'cs'; ctx.append(s);
+  add('Command palette…', openPal);
+  add('Close all windows', () => [...wins.values()].forEach(close));
+  Object.assign(ctx.style, { left: Math.min(e.clientX, innerWidth - 210) + 'px', top: Math.min(e.clientY, innerHeight - 240) + 'px' });
+  ctx.classList.add('show');
+});
+addEventListener('pointerdown', e => { if (!e.target.closest('#ctx')) hideCtx(); });
+
+/* ── tier ────────────────────────────────────────────────── */
+const vitalsPanels = [];
+const hist = Array.from({ length: 60 }, (_, i) => 34 + Math.sin(i / 6) * 1.4 + Math.random() * .8);
+const TIERS = {
+  green: { head: 34.3, phantom: '6.4 GiB', stall: 0.1  },
+  amber: { head: 3.6,  phantom: '7.1 GiB', stall: 6.4  },
+  red:   { head: 1.4,  phantom: '7.8 GiB', stall: 24.3 },
+  black: { head: 0.4,  phantom: '8.2 GiB', stall: 61.7 }
+};
+let tier = 'green';
+
+function paintVitals(d) {
+  const t = TIERS[tier], W = 300, H = 38;
+  const lo = Math.min(...hist) - 1, hi = Math.max(...hist) + 1;
+  const path = hist.map((v, i) => `${i ? 'L' : 'M'}${(i / (hist.length - 1) * W).toFixed(1)} ${(H - ((v - lo) / (hi - lo)) * (H - 6) - 3).toFixed(1)}`).join(' ');
+  const q = s => d.querySelector(s);
+  q('.line').setAttribute('d', path);
+  q('.fill').setAttribute('d', path + ` L${W} ${H} L0 ${H} Z`);
+  q('[data-head]').textContent = t.head.toFixed(1);
+  q('[data-phantom]').textContent = t.phantom;
+  q('[data-stall]').textContent = t.stall.toFixed(1) + '%';
+  const sb = q('[data-stallbar]'); sb.style.width = Math.min(100, t.stall * 1.5) + '%'; sb.className = t.stall > 5 ? 'hot' : '';
+  q('[data-rambar]').style.width = (100 - t.head / 30.7 * 100).toFixed(0) + '%';
+}
+
+function setTier(t) {
+  tier = t; root.dataset.tier = t;
+  $('#tierWord').textContent = t[0].toUpperCase() + t.slice(1);
+  hist.push(TIERS[t].head + Math.random() * .6); hist.shift();
+  vitalsPanels.forEach(p => p.isConnected && paintVitals(p));
+  $('#critical').classList.toggle('show', t === 'black');
+  document.querySelectorAll('#sim button').forEach(b => b.classList.toggle('sel', b.dataset.t === t));
+}
+document.querySelectorAll('#sim button').forEach(b => b.onclick = () => setTier(b.dataset.t));
+
+setInterval(() => {
+  if (tier !== 'green') return;
+  hist.push(34 + Math.sin(Date.now() / 9000) * 1.2 + Math.random() * .7); hist.shift();
+  vitalsPanels.forEach(p => p.isConnected && paintVitals(p));
+}, 2200);
+
+/* ── boot ────────────────────────────────────────────────── */
+launch('vitals');
+launch('files');
+launch('facets');
+setTier('green');
+})();
+</script>
