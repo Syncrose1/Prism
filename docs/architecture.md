@@ -499,8 +499,14 @@ shells are typically heavy. This holds only under discipline:
 - apps as inline DOM modules, not iframes — iframes buy isolation Prism does not
   need and cost memory and styling coherence it does
 - everything embedded in the binary via `rust-embed`, no build step, no CDN
-- the shell must stay usable at Red tier, when the host is already struggling;
-  it is a rescue interface before it is a desktop
+
+> **Superseded by [ADR 0002](decisions/0002-critical-functions-mode.md).** This
+> section originally required the rich shell itself to stay usable at Red tier.
+> That made every decision in the desktop hostage to the machine's worst moment.
+> Prism instead ships a separate zero-JavaScript **Critical Functions Mode** at
+> `/rescue`, served unconditionally at every tier, and the shell de-escalates
+> into it. "Lightweight" remains a goal for Prism OS; it is no longer the thing
+> that has to survive an emergency.
 
 **The desktop metaphor is wrong on a phone**, but phones are not the target.
 

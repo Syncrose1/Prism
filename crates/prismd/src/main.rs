@@ -14,6 +14,7 @@ mod action;
 mod api;
 mod bind;
 mod monitor;
+mod rescue;
 
 use anyhow::Context as _;
 use prism_core::auth::{AuthPolicy, Authenticator, session::SessionKey, totp};
@@ -56,6 +57,7 @@ fn main() -> anyhow::Result<()> {
     ));
 
     let vitals: api::SharedVitals = Arc::new(RwLock::new(api::Vitals::default()));
+    let facets = Arc::new(profile.facet.clone());
 
     // The monitor owns its own thread so that neither half can stall the other.
     let monitor_vitals = Arc::clone(&vitals);
@@ -69,7 +71,7 @@ fn main() -> anyhow::Result<()> {
         })
         .context("spawning monitor thread")?;
 
-    serve(host, auth, vitals)
+    serve(host, auth, vitals, facets)
 }
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
@@ -77,6 +79,7 @@ async fn serve(
     host: HostConfig,
     auth: Arc<Authenticator>,
     vitals: api::SharedVitals,
+    facets: Arc<Vec<prism_core::config::Facet>>,
 ) -> anyhow::Result<()> {
     let addr = bind::resolve(&host.server.bind, host.server.port)?;
     let listener = tokio::net::TcpListener::bind(addr)
@@ -84,7 +87,11 @@ async fn serve(
         .with_context(|| format!("binding {addr}"))?;
 
     info!(%addr, "api listening");
-    let app = api::router(api::AppState { auth, vitals });
+    let app = api::router(api::AppState {
+        auth,
+        vitals,
+        facets,
+    });
 
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())

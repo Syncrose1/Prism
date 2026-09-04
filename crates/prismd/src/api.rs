@@ -14,6 +14,7 @@ use axum::{
     routing::{get, post},
 };
 use prism_core::auth::{AuthOutcome, Authenticator, CodeOutcome, Sensitivity, totp};
+use prism_core::config::Facet;
 use prism_core::governor::Tier;
 use prism_core::sensors::disk::MountUsage;
 use prism_core::sensors::memory::MemorySnapshot;
@@ -85,6 +86,7 @@ pub type SharedVitals = Arc<RwLock<Vitals>>;
 pub struct AppState {
     pub auth: Arc<Authenticator>,
     pub vitals: SharedVitals,
+    pub facets: Arc<Vec<Facet>>,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -92,6 +94,9 @@ pub fn router(state: AppState) -> Router {
         .route("/api/health", get(health))
         .route("/api/auth/login", post(login))
         .route("/api/vitals", get(vitals))
+        // Critical Functions Mode. Merged rather than nested so it shares no
+        // middleware with the API surface — see ADR 0002.
+        .merge(crate::rescue::routes())
         .with_state(state)
 }
 
@@ -118,7 +123,7 @@ fn token_from(headers: &HeaderMap) -> Option<String> {
 }
 
 /// Enforce a tier, returning the error response to send if it is not met.
-fn require(state: &AppState, headers: &HeaderMap, need: Sensitivity) -> Option<Response> {
+pub(crate) fn require(state: &AppState, headers: &HeaderMap, need: Sensitivity) -> Option<Response> {
     let now = totp::now_unix();
     match state.auth.authorize(token_from(headers).as_deref(), need, now) {
         AuthOutcome::Granted => None,

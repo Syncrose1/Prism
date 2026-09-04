@@ -81,6 +81,48 @@ pub fn total_rss_kb(pids: impl IntoIterator<Item = u32>) -> u64 {
     pids.into_iter().filter_map(rss_kb).sum()
 }
 
+/// A process with its resident size, for "what is eating the machine?".
+#[derive(Debug, Clone)]
+pub struct RankedProc {
+    pub pid: u32,
+    pub comm: String,
+    pub cmdline: String,
+    pub rss_kb: u64,
+}
+
+/// The `n` largest processes by resident size, descending.
+///
+/// Reads `VmRSS` for every process, which is markedly more expensive than the
+/// cmdline-only scan used by the storm detector. That is acceptable because this
+/// runs on demand for the rescue page rather than every tick — but it is the
+/// reason the two paths are separate rather than one shared scan.
+pub fn top_by_rss(n: usize) -> Vec<RankedProc> {
+    let mut all: Vec<RankedProc> = Vec::new();
+    for_each(|pid, cmdline| {
+        let Some(rss_kb) = rss_kb(pid) else { return };
+        // Kernel threads and trivial processes are noise on a page whose job is
+        // identifying what to kill.
+        if rss_kb < 1024 {
+            return;
+        }
+        all.push(RankedProc {
+            pid,
+            comm: comm(pid).unwrap_or_default(),
+            cmdline: cmdline.to_string(),
+            rss_kb,
+        });
+    });
+    all.sort_unstable_by(|a, b| b.rss_kb.cmp(&a.rss_kb));
+    all.truncate(n);
+    all
+}
+
+pub fn comm(pid: u32) -> Option<String> {
+    std::fs::read_to_string(format!("/proc/{pid}/comm"))
+        .ok()
+        .map(|s| s.trim().to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
