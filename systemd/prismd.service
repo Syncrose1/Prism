@@ -1,0 +1,39 @@
+[Unit]
+Description=Prism — resilience and remote control for this workstation
+Documentation=https://github.com/raahats/Prism
+# Prism watches the machine rather than participating in the graphical session,
+# so it is deliberately not bound to graphical-session.target. It should be
+# running before the desktop comes up and still running after it dies — that
+# being the failure it exists to survive.
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/prismd
+Restart=always
+RestartSec=5
+# A daemon that legitimately restarts while the machine is thrashing must not be
+# rate-limited into giving up.
+StartLimitIntervalSec=0
+
+# The reason this unit exists rather than a nohup.
+#
+# prismd calls mlockall() so it cannot be paged out under memory pressure — the
+# exact moment it needs to act. The default RLIMIT_MEMLOCK on this host is 8 MiB,
+# which is far too small, so the call fails and the daemon becomes swappable.
+LimitMEMLOCK=infinity
+
+# Prism must keep running when everything else is being killed for memory, so it
+# is told to be an unattractive target. It is small; the kernel gains nothing by
+# reclaiming it and loses the thing that would have contained the problem.
+OOMScoreAdjust=-900
+OOMPolicy=continue
+
+# Modest priority. Prism is not compute-heavy, but a scheduling delay while the
+# machine thrashes is a delay in noticing that it is thrashing.
+Nice=-5
+
+Environment=PRISM_LOG=info
+
+[Install]
+WantedBy=default.target

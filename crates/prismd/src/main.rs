@@ -202,17 +202,36 @@ async fn shutdown_signal() {
 /// a restrictive `RLIMIT_MEMLOCK` refusing to start would be worse than running
 /// slightly less reliably.
 fn lock_memory() {
+    // MCL_ONFAULT first. Plain MCL_CURRENT|MCL_FUTURE locks the whole *address
+    // space*, which for a Rust binary with its allocator arenas is far larger
+    // than what is actually resident — so it fails against a modest
+    // RLIMIT_MEMLOCK even though the daemon itself is only a few MiB. ONFAULT
+    // locks pages as they are faulted in, so the limit applies to real usage
+    // and an unprivileged user service can succeed without any system change.
+    //
     // SAFETY: `mlockall` takes only a flags bitmask and touches no caller
     // memory. The call is total; it either succeeds or reports errno.
-    let rc = unsafe { libc::mlockall(libc::MCL_CURRENT | libc::MCL_FUTURE) };
-    if rc == 0 {
-        info!("memory locked (mlockall): daemon is unswappable");
-    } else {
-        let err = std::io::Error::last_os_error();
-        warn!(
-            %err,
-            "could not lock memory; prism may be paged out under pressure. \
-             Raise LimitMEMLOCK in the service unit to fix."
-        );
+    let onfault = unsafe {
+        libc::mlockall(libc::MCL_CURRENT | libc::MCL_FUTURE | libc::MCL_ONFAULT)
+    };
+    if onfault == 0 {
+        info!("memory locked (mlockall, on-fault): daemon is unswappable");
+        return;
     }
+
+    // Older kernels lack MCL_ONFAULT and return EINVAL. Fall back to the plain
+    // form, which needs a larger limit but is worth attempting.
+    let plain = unsafe { libc::mlockall(libc::MCL_CURRENT | libc::MCL_FUTURE) };
+    if plain == 0 {
+        info!("memory locked (mlockall): daemon is unswappable");
+        return;
+    }
+
+    let err = std::io::Error::last_os_error();
+    warn!(
+        %err,
+        "could not lock memory; prism may be paged out under the pressure it \
+         exists to resolve. Raise LimitMEMLOCK, or set \
+         DefaultLimitMEMLOCK=infinity in /etc/systemd/user.conf."
+    );
 }
