@@ -20,6 +20,7 @@ mod files_api;
 mod rescue;
 mod term_api;
 mod ui;
+mod workspace;
 
 use anyhow::Context as _;
 use prism_core::auth::{AuthPolicy, Authenticator, session::SessionKey};
@@ -80,7 +81,11 @@ fn main() -> anyhow::Result<()> {
     ));
 
     let vitals: api::SharedVitals = Arc::new(RwLock::new(api::Vitals::default()));
-    let facets = Arc::new(profile.facet.clone());
+    let facets = Arc::new(RwLock::new(profile.facet.clone()));
+    let profile_path = Arc::new(dir.join("profile.toml"));
+    let events = Arc::new(prism_core::events::EventLog::new());
+    events.push(prism_core::events::Level::Info, "prism", "daemon started");
+    let state_dir_arc = Arc::new(state_dir.clone());
     let terminals = Arc::new(prism_core::term::session::SessionManager::new(
         term_api::manager_from(&host.terminal),
     ));
@@ -123,17 +128,19 @@ fn main() -> anyhow::Result<()> {
     // The monitor owns its own thread so that neither half can stall the other.
     let monitor_vitals = Arc::clone(&vitals);
     let monitor_terms = Arc::clone(&terminals);
+    let monitor_events = Arc::clone(&events);
     std::thread::Builder::new()
         .name("prism-monitor".into())
         .spawn(move || {
-            let mut monitor = monitor::Monitor::new(profile, monitor_vitals, monitor_terms);
+            let mut monitor =
+                monitor::Monitor::new(profile, monitor_vitals, monitor_terms, monitor_events);
             if let Err(e) = monitor.run() {
                 tracing::error!(error = %e, "monitor loop exited");
             }
         })
         .context("spawning monitor thread")?;
 
-    serve(host, auth, vitals, facets, terminals, roots, thumb_dir)
+    serve(host, auth, vitals, facets, terminals, roots, thumb_dir, profile_path, state_dir_arc, events)
 }
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
@@ -141,10 +148,13 @@ async fn serve(
     host: HostConfig,
     auth: Arc<Authenticator>,
     vitals: api::SharedVitals,
-    facets: Arc<Vec<prism_core::config::Facet>>,
+    facets: Arc<RwLock<Vec<prism_core::config::Facet>>>,
     terminals: Arc<prism_core::term::session::SessionManager>,
     roots: Arc<Vec<prism_core::files::path::Root>>,
     thumb_dir: Arc<std::path::PathBuf>,
+    profile_path: Arc<std::path::PathBuf>,
+    state_dir: Arc<std::path::PathBuf>,
+    events: Arc<prism_core::events::EventLog>,
 ) -> anyhow::Result<()> {
     let addr = bind::resolve(&host.server.bind, host.server.port)?;
     let listener = tokio::net::TcpListener::bind(addr)
@@ -159,6 +169,9 @@ async fn serve(
         terminals,
         roots,
         thumb_dir,
+        profile_path,
+        state_dir,
+        events,
     });
 
     axum::serve(listener, app)

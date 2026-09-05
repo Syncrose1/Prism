@@ -26,7 +26,8 @@ use crate::api::{AppState, require};
 
 pub fn routes() -> Router<AppState> {
     Router::new()
-        .route("/api/facets", get(list))
+        .route("/api/facets", get(list).post(create))
+        .route("/api/facets/{id}", axum::routing::delete(remove))
         .route("/api/facets/{id}/start", post(start))
         .route("/api/facets/{id}/stop", post(stop))
         .route("/api/facets/{id}/kill", post(kill))
@@ -43,8 +44,21 @@ fn err(status: StatusCode, error: &'static str, detail: impl Into<String>) -> Re
     (status, Json(ErrorBody { error, detail: detail.into() })).into_response()
 }
 
-fn find<'a>(state: &'a AppState, id: &str) -> Option<&'a Facet> {
-    state.facets.iter().find(|f| f.id == id)
+fn find(state: &AppState, id: &str) -> Option<Facet> {
+    state.facets.read().expect("facets poisoned").iter().find(|f| f.id == id).cloned()
+}
+
+/// Persist the facet list back to the profile the daemon loaded.
+///
+/// Rewriting the operator's own `profile.toml` keeps one source of truth:
+/// a facet added from the UI is a facet they can also read, edit and copy to
+/// another machine, rather than living in a database only Prism understands.
+fn persist(state: &AppState) -> anyhow::Result<()> {
+    let facets = state.facets.read().expect("facets poisoned").clone();
+    let mut profile: prism_core::config::Profile =
+        prism_core::config::load_or_default(&state.profile_path)?;
+    profile.facet = facets;
+    prism_core::config::save(&state.profile_path, &profile)
 }
 
 #[derive(Serialize)]
@@ -119,8 +133,170 @@ async fn list(State(state): State<AppState>, headers: HeaderMap) -> Response {
         return d;
     }
     let sup = Supervisor::new();
-    let facets: Vec<FacetView> = state.facets.iter().map(|f| view(f, &sup)).collect();
+    let facets: Vec<FacetView> = state
+        .facets
+        .read()
+        .expect("facets poisoned")
+        .iter()
+        .map(|f| view(f, &sup))
+        .collect();
     Json(facets).into_response()
+}
+
+#[derive(Deserialize)]
+struct CreateRequest {
+    name: String,
+    /// The command line, as typed. Split with shell-like quoting.
+    command: String,
+    #[serde(default)]
+    cwd: Option<String>,
+    #[serde(default)]
+    pty: bool,
+    #[serde(default)]
+    limits: LimitsView,
+}
+
+/// Split a command line on whitespace, honouring single and double quotes.
+///
+/// Deliberately not a shell: no globbing, no substitution, no pipes. The
+/// operator asked to add scripts, and a script path with a space in it should
+/// work — but a facet definition is not a place to smuggle `; rm -rf`.
+pub fn split_command(input: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut quote: Option<char> = None;
+    let mut any = false;
+
+    for ch in input.chars() {
+        match quote {
+            Some(q) if ch == q => quote = None,
+            Some(_) => cur.push(ch),
+            None if ch == '\'' || ch == '"' => {
+                quote = Some(ch);
+                any = true;
+            }
+            None if ch.is_whitespace() => {
+                if !cur.is_empty() || any {
+                    out.push(std::mem::take(&mut cur));
+                    any = false;
+                }
+            }
+            None => cur.push(ch),
+        }
+    }
+    if !cur.is_empty() || any {
+        out.push(cur);
+    }
+    out
+}
+
+/// Derive a stable, filesystem- and unit-safe id from a name.
+fn slug(name: &str) -> String {
+    let s: String = name
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' })
+        .collect();
+    let s = s.trim_matches('-').to_string();
+    // Collapse runs, so "My  Script!!" does not become "my--script--".
+    let mut out = String::new();
+    let mut last_dash = false;
+    for c in s.chars() {
+        if c == '-' {
+            if !last_dash {
+                out.push(c);
+            }
+            last_dash = true;
+        } else {
+            out.push(c);
+            last_dash = false;
+        }
+    }
+    if out.is_empty() { "facet".into() } else { out }
+}
+
+async fn create(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<CreateRequest>,
+) -> Response {
+    // Adding a facet defines a command Prism will later run, so it is as
+    // sensitive as running one.
+    if let Some(d) = require(&state, &headers, Sensitivity::Fresh) {
+        return d;
+    }
+
+    let name = body.name.trim().to_string();
+    if name.is_empty() {
+        return err(StatusCode::BAD_REQUEST, "no_name", "a name is required");
+    }
+    let command = split_command(&body.command);
+    if command.is_empty() {
+        return err(StatusCode::BAD_REQUEST, "no_command", "a command is required");
+    }
+
+    let mut id = slug(&name);
+    {
+        let facets = state.facets.read().expect("facets poisoned");
+        if facets.iter().any(|f| f.id == id) {
+            // Names collide; disambiguate rather than refusing.
+            let mut n = 2;
+            while facets.iter().any(|f| f.id == format!("{id}-{n}")) {
+                n += 1;
+            }
+            id = format!("{id}-{n}");
+        }
+    }
+
+    let facet = Facet {
+        id: id.clone(),
+        name,
+        command,
+        cwd: body.cwd.filter(|c| !c.trim().is_empty()).map(std::path::PathBuf::from),
+        limits: FacetLimits {
+            memory_high: body.limits.memory_high,
+            memory_max: body.limits.memory_max,
+            swap_max: body.limits.swap_max,
+        },
+        enabled_if: Default::default(),
+        pty: body.pty,
+    };
+
+    state.facets.write().expect("facets poisoned").push(facet.clone());
+    if let Err(e) = persist(&state) {
+        // Roll back rather than leaving memory and disk disagreeing.
+        state.facets.write().expect("facets poisoned").retain(|f| f.id != id);
+        warn!(error = %e, "could not persist new facet");
+        return err(StatusCode::INTERNAL_SERVER_ERROR, "save_failed", e.to_string());
+    }
+
+    info!(facet = %id, "facet added");
+    Json(view(&facet, &Supervisor::new())).into_response()
+}
+
+async fn remove(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    if let Some(d) = require(&state, &headers, Sensitivity::Fresh) {
+        return d;
+    }
+    let Some(removed) = find(&state, &id) else {
+        return err(StatusCode::NOT_FOUND, "no_facet", "no such facet");
+    };
+    // A running workload must be stopped deliberately, not removed out from
+    // under itself leaving an orphaned scope nothing knows about.
+    if matches!(Supervisor::new().status(&id), FacetStatus::Running) {
+        return err(StatusCode::CONFLICT, "still_running", "stop it first");
+    }
+
+    state.facets.write().expect("facets poisoned").retain(|f| f.id != id);
+    if let Err(e) = persist(&state) {
+        state.facets.write().expect("facets poisoned").push(removed);
+        return err(StatusCode::INTERNAL_SERVER_ERROR, "save_failed", e.to_string());
+    }
+    info!(facet = %id, "facet removed");
+    StatusCode::NO_CONTENT.into_response()
 }
 
 async fn start(
@@ -179,10 +355,10 @@ async fn start(
         return err(StatusCode::CONFLICT, "already_running", "already running");
     }
 
-    match sup.start(facet) {
+    match sup.start(&facet) {
         Ok(()) => {
             info!(facet = %id, "facet started");
-            Json(view(facet, &sup)).into_response()
+            Json(view(&facet, &sup)).into_response()
         }
         Err(e) => {
             warn!(facet = %id, error = %e, "facet start failed");
@@ -310,6 +486,49 @@ mod tests {
         assert_eq!(v.memory_high.as_deref(), Some("22G"));
         assert_eq!(v.memory_max, None);
         assert_eq!(v.swap_max.as_deref(), Some("6G"));
+    }
+
+    #[test]
+    fn command_splitting_handles_quoted_paths() {
+        // A script path with a space in it is the whole reason this exists.
+        assert_eq!(split_command("./run.sh"), vec!["./run.sh"]);
+        assert_eq!(split_command("python  -m  comfy"), vec!["python", "-m", "comfy"]);
+        assert_eq!(
+            split_command(r#""/home/a b/run.sh" --flag"#),
+            vec!["/home/a b/run.sh", "--flag"]
+        );
+        assert_eq!(split_command("'single quoted arg'"), vec!["single quoted arg"]);
+    }
+
+    #[test]
+    fn command_splitting_is_not_a_shell() {
+        // No globbing, no substitution, no operators — a facet definition is
+        // not a place to smuggle a second command.
+        assert_eq!(
+            split_command("echo hi; rm -rf /"),
+            vec!["echo", "hi;", "rm", "-rf", "/"]
+        );
+        assert_eq!(split_command("echo $HOME"), vec!["echo", "$HOME"]);
+    }
+
+    #[test]
+    fn empty_command_yields_nothing_to_run() {
+        assert!(split_command("").is_empty());
+        assert!(split_command("   ").is_empty());
+    }
+
+    #[test]
+    fn an_empty_quoted_argument_survives() {
+        assert_eq!(split_command(r#"cmd "" x"#), vec!["cmd", "", "x"]);
+    }
+
+    #[test]
+    fn slugs_are_stable_and_unit_safe() {
+        assert_eq!(slug("ComfyUI"), "comfyui");
+        assert_eq!(slug("My  Script!!"), "my-script");
+        assert_eq!(slug("llama.cpp server"), "llama-cpp-server");
+        assert_eq!(slug("!!!"), "facet");
+        assert_eq!(slug(""), "facet");
     }
 
     #[test]

@@ -24,6 +24,7 @@ use prism_core::term::pty::WinSize;
 use prism_core::term::session::{SpawnError, TermConfig};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use std::time::Duration;
 use tracing::{info, warn};
 
 use crate::api::{AppState, require};
@@ -225,10 +226,19 @@ async fn attach(
     ws.on_upgrade(move |socket| pump(socket, session))
 }
 
+/// How often to ping an idle socket.
+///
+/// A terminal nobody is typing into sends nothing at all, and an idle
+/// WebSocket gets dropped by browsers, proxies and NAT tables somewhere around
+/// 30-60 seconds. That is the "it detached on its own" the operator saw. A ping
+/// well inside that window keeps the connection accounted for as live.
+const PING_EVERY: Duration = Duration::from_secs(20);
+
 /// Bridge a WebSocket to a session for as long as both live.
 ///
 /// Dropping out of this function is a *detach*, not a kill. The session, its
-/// scrollback and everything it launched carry on without a listener.
+/// scrollback and everything it launched carry on without a listener — which is
+/// what makes the client's automatic reconnect safe.
 async fn pump(socket: WebSocket, session: Arc<prism_core::term::session::Session>) {
     use futures_util::{SinkExt, StreamExt};
 
@@ -241,38 +251,51 @@ async fn pump(socket: WebSocket, session: Arc<prism_core::term::session::Session
         return;
     }
 
-    let writer = Arc::clone(&session);
+    let id = session.id.clone();
     let out = tokio::spawn(async move {
+        let mut ping = tokio::time::interval(PING_EVERY);
+        ping.tick().await; // the first tick is immediate
         loop {
-            match rx.recv().await {
-                Ok(chunk) => {
-                    if sink
-                        .send(Message::Binary(chunk.as_slice().to_vec().into()))
-                        .await
-                        .is_err()
-                    {
+            tokio::select! {
+                received = rx.recv() => match received {
+                    Ok(chunk) => {
+                        if sink
+                            .send(Message::Binary(chunk.as_slice().to_vec().into()))
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                    // Lagged means this client could not keep up and the channel
+                    // dropped chunks for it. Continuing with a gap is better than
+                    // disconnecting the operator mid-session.
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        warn!(%id, dropped = n, "terminal client lagged");
+                    }
+                    Err(_) => break,
+                },
+                _ = ping.tick() => {
+                    if sink.send(Message::Ping(Vec::new().into())).await.is_err() {
                         break;
                     }
                 }
-                // Lagged means this client could not keep up and the channel
-                // dropped chunks for it. Continuing with a gap is better than
-                // disconnecting the operator mid-session.
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                    warn!(id = %writer.id, dropped = n, "terminal client lagged");
-                }
-                Err(_) => break,
             }
         }
     });
 
     // Keystrokes travel as raw bytes; text frames are accepted so a trivial
     // client can send without constructing binary frames.
-    while let Some(Ok(msg)) = stream.next().await {
-        let bytes = match msg {
-            Message::Binary(b) => b.to_vec(),
-            Message::Text(t) => t.as_bytes().to_vec(),
-            Message::Close(_) => break,
-            _ => continue,
+    while let Some(message) = stream.next().await {
+        let bytes = match message {
+            Ok(Message::Binary(b)) => b.to_vec(),
+            Ok(Message::Text(t)) => t.as_bytes().to_vec(),
+            Ok(Message::Close(_)) => break,
+            // Pong and Ping are keepalive traffic, not input.
+            Ok(_) => continue,
+            // A read error ends this attachment, but the session is untouched
+            // and the client will reconnect.
+            Err(_) => break,
         };
         if session.write(&bytes).is_err() {
             break;

@@ -42,6 +42,25 @@ EOF
         exit 1
     fi
     rm -f /tmp/prism-shell-check.js
+
+    # Syntax alone is not enough. Deleting a function while removing a
+    # neighbouring one left the shell parsing cleanly and throwing
+    # "appTerminal is not defined" at boot — page rendered, nothing worked.
+    # Check that every app the registry names is actually defined.
+    python3 - <<'EOF' || exit 1
+import re, sys
+src = open("ui/shell.html").read()
+registry = re.search(r"const APPS = \{(.*?)\n\};", src, re.S)
+if not registry:
+    print("could not find the APPS registry", file=sys.stderr); sys.exit(1)
+referenced = set(re.findall(r"\b(app[A-Z]\w*)\b", registry.group(1)))
+defined = set(re.findall(r"function\s+(app[A-Z]\w*)\s*\(", src))
+missing = sorted(referenced - defined)
+if missing:
+    print("ui/shell.html: APPS references undefined functions: %s" % ", ".join(missing), file=sys.stderr)
+    sys.exit(1)
+print("ui/shell.html: all %d registered apps are defined" % len(referenced))
+EOF
 else
     echo "note: node not found, skipping shell syntax check" >&2
 fi

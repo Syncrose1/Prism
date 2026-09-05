@@ -86,7 +86,10 @@ pub type SharedVitals = Arc<RwLock<Vitals>>;
 pub struct AppState {
     pub auth: Arc<Authenticator>,
     pub vitals: SharedVitals,
-    pub facets: Arc<Vec<Facet>>,
+    pub facets: Arc<RwLock<Vec<Facet>>>,
+    pub profile_path: Arc<std::path::PathBuf>,
+    pub state_dir: Arc<std::path::PathBuf>,
+    pub events: Arc<prism_core::events::EventLog>,
     pub terminals: Arc<prism_core::term::session::SessionManager>,
     pub roots: Arc<Vec<prism_core::files::path::Root>>,
     pub thumb_dir: Arc<std::path::PathBuf>,
@@ -97,12 +100,14 @@ pub fn router(state: AppState) -> Router {
         .route("/api/health", get(health))
         .route("/api/auth/login", post(login))
         .route("/api/vitals", get(vitals))
+        .route("/api/events", get(events))
         // Critical Functions Mode. Merged rather than nested so it shares no
         // middleware with the API surface — see ADR 0002.
         .merge(crate::rescue::routes())
         .merge(crate::term_api::routes())
         .merge(crate::files_api::routes())
         .merge(crate::facets_api::routes())
+        .merge(crate::workspace::routes())
         .route("/", get(crate::ui::index))
         .route("/ui/{*path}", get(crate::ui::asset))
         .with_state(state)
@@ -257,6 +262,15 @@ async fn login(State(state): State<AppState>, Json(body): Json<LoginRequest>) ->
                 .into_response()
         }
     }
+}
+
+/// The Timeline's source. Prism's own actions appear here alongside what it
+/// observed, which is the point — see `events.rs`.
+async fn events(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Some(denied) = require(&state, &headers, Sensitivity::Session) {
+        return denied;
+    }
+    Json(state.events.recent(200)).into_response()
 }
 
 async fn vitals(State(state): State<AppState>, headers: HeaderMap) -> Response {

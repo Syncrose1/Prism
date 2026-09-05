@@ -289,6 +289,24 @@ body {
 .pv .meta { font-size: 11px; color: var(--ink-faint); text-align: center; }
 .pv .meta b { color: var(--ink-dim); font-weight: 500; }
 
+/* Timeline */
+.tl { display: grid; gap: 1px; }
+.ev {
+  display: grid; grid-template-columns: 62px 74px 1fr auto; gap: 9px; align-items: baseline;
+  padding: 6px 8px; border-radius: var(--r); font-size: 11.5px;
+}
+.ev:hover { background: var(--raised); }
+.ev .t { color: var(--ink-ghost); font-variant-numeric: tabular-nums; }
+.ev .src { color: var(--ink-ghost); font-size: 10px; letter-spacing: .1em; text-transform: uppercase; }
+.ev .msg { color: var(--ink-dim); }
+.ev .rel { color: var(--ink-ghost); font-size: 10px; }
+.ev.warn   .msg { color: var(--amber); }
+.ev.error  .msg { color: var(--red); }
+/* Prism's own actions are marked, so they can be told apart from what it saw. */
+.ev.action .msg { color: var(--green); }
+.ev.action .src::after { content: ' ·'; }
+.evdetail { grid-column: 3 / -1; color: var(--ink-ghost); font-size: 10.5px; margin-top: 2px; }
+
 /* Gallery */
 .gal { position: absolute; inset: 0; display: flex; flex-direction: column; background: #050608; border-radius: 0 0 6px 6px; overflow: hidden; }
 .gal .stage {
@@ -372,6 +390,9 @@ body {
   outline: none;
 }
 .limits input:focus { border-color: var(--ink-faint); }
+.limits label.chk { display: flex; align-items: flex-start; gap: 7px; line-height: 1.4; }
+.limits label.chk input { width: auto; margin: 2px 0 0; }
+.addfacet { margin-top: 4px; width: 100%; }
 .facet .st { margin-left: auto; font-size: 10px; letter-spacing: .15em; text-transform: uppercase; color: var(--ink-ghost); }
 .bars { display: grid; gap: 5px; }
 .bar { display: flex; align-items: center; gap: 8px; }
@@ -574,7 +595,7 @@ const FS = {
 let zTop = 10, seq = 0;
 const wins = new Map();
 
-function makeWindow({ id, app, title, meta = '', w = 380, h = 320, x, y, content }) {
+function makeWindow({ id, app, title, meta = '', w = 380, h = 320, x, y, args, content }) {
   const wid = id || `${app}-${++seq}`;
   if (wins.has(wid)) { focus(wins.get(wid)); return wins.get(wid); }
 
@@ -583,6 +604,10 @@ function makeWindow({ id, app, title, meta = '', w = 380, h = 320, x, y, content
   const n = wins.size;
   x = x ?? 40 + (n % 6) * 34;
   y = y ?? 26 + (n % 6) * 30;
+  // A restored window may have been saved on a larger screen; keep it reachable.
+  const deskRect = desk.getBoundingClientRect();
+  x = Math.max(0, Math.min(x, Math.max(0, deskRect.width - 120)));
+  y = Math.max(0, Math.min(y, Math.max(0, deskRect.height - 40)));
 
   const el = document.createElement('section');
   el.className = 'win';
@@ -602,11 +627,12 @@ function makeWindow({ id, app, title, meta = '', w = 380, h = 320, x, y, content
   bodyEl.append(content);
   desk.append(el);
 
-  const win = { id: wid, app, el, restore: null, snapped: false, preSnap: null };
+  const win = { id: wid, app, el, args, restore: null, snapped: false, preSnap: null };
   wins.set(wid, win);
   wire(win);
   focus(win);
   syncDock();
+  scheduleSave();
   return win;
 }
 
@@ -619,6 +645,7 @@ function focus(win) {
 }
 
 function close(win) {
+  scheduleSave();
   // Detach, never kill: the session and anything it launched carry on.
   const body = win.el.querySelector('.body')?.firstElementChild;
   if (body && body.__onClose) body.__onClose();
@@ -692,6 +719,7 @@ function wire(win) {
       bar.removeEventListener('pointermove', move);
       bar.removeEventListener('pointerup', up);
       snap.style.display = 'none';
+      scheduleSave();
       if (zone) {
         // Remember the floating geometry so un-snapping can return to it.
         if (!win.snapped) {
@@ -770,6 +798,13 @@ function appFiles(startRoot, startPath = '') {
 
   async function render() {
     const list = d.querySelector('.flist'), crumb = d.querySelector('.crumb');
+    // An app can be opened before the root list has arrived — from a restored
+    // workspace, or a deep link. Fetch on demand rather than claiming there are
+    // none.
+    if (!root) {
+      if (!ROOTS.length) await loadRoots();
+      root = (ROOTS[0] && ROOTS[0].name) || '';
+    }
     if (!root) {
       list.innerHTML = '<div class="empty">no file roots configured</div>';
       return;
@@ -947,12 +982,13 @@ function appFacets() {
       facets = await API.get('/api/facets');
     } catch { return; }
 
-    if (!facets.length) {
-      list.innerHTML = '<div class="empty">no facets configured</div>';
-      return;
-    }
-
     list.innerHTML = '';
+    if (!facets.length) {
+      const e = document.createElement('div');
+      e.className = 'empty';
+      e.textContent = 'no facets yet — add a script below';
+      list.append(e);
+    }
     for (const f of facets) {
       const card = document.createElement('div');
       card.className = 'facet';
@@ -1012,10 +1048,29 @@ function appFacets() {
         acts.append(start);
       }
       acts.append(btn('Limits', '', () => editLimits(f, () => render())));
+      if (!running) {
+        acts.append(btn('Remove', 'danger', async () => {
+          if (!confirm(`Remove "${f.name}"? The script itself is not deleted.`)) return;
+          try {
+            await fetch(`/api/facets/${encodeURIComponent(f.id)}`, {
+              method: 'DELETE', credentials: 'same-origin'
+            });
+          } catch {}
+          render();
+        }));
+      }
       card.append(acts);
 
       list.append(card);
     }
+
+    // Adding a script is the point of Quick Launch; it should not require
+    // editing a TOML file over SSH.
+    const add = document.createElement('button');
+    add.className = 'btn addfacet';
+    add.textContent = '+ Add script';
+    add.onclick = () => newFacet(() => render());
+    list.append(add);
   }
 
   render();
@@ -1024,6 +1079,48 @@ function appFacets() {
   timer = setInterval(() => d.isConnected ? render() : clearInterval(timer), 3000);
   d.__onClose = () => clearInterval(timer);
   return d;
+}
+
+/* Define a new facet from the UI. It is written back into the operator's own
+   profile.toml, so a script added here is one they can also read, edit by hand,
+   and copy to another machine. */
+function newFacet(done) {
+  const content = el(`<div class="limits">
+      <label>Name <input name="name" placeholder="ComfyUI"></label>
+      <label>Command <input name="command" placeholder="/path/to/run.sh --flag"></label>
+      <label>Working directory <input name="cwd" placeholder="optional"></label>
+      <label class="chk"><input type="checkbox" name="pty">
+        Interactive — opens a terminal so prompts can be answered</label>
+      <label>Memory max <input name="memory_max" placeholder="optional, e.g. 26G"></label>
+      <label>Swap max <input name="swap_max" placeholder="optional, e.g. 6G"></label>
+      <p class="note-line">Quoted paths are handled. This is not a shell: no
+        pipes, globbing or substitution.</p>
+      <div class="acts"><button class="btn create">Add</button></div>
+    </div>`);
+  const win = makeWindow({ app: 'newfacet', title: 'Add script', w: 360, h: 420, content });
+  const val = n => content.querySelector(`[name=${n}]`).value.trim();
+
+  content.querySelector('.create').onclick = async () => {
+    try {
+      await API.post('/api/facets', {
+        name: val('name'),
+        command: val('command'),
+        cwd: val('cwd') || null,
+        pty: content.querySelector('[name=pty]').checked,
+        limits: {
+          memory_high: null,
+          memory_max: val('memory_max') || null,
+          swap_max: val('swap_max') || null
+        }
+      });
+      close(win);
+      done && done();
+    } catch (e) {
+      alert(e.message || 'could not add');
+    }
+  };
+  setTimeout(() => content.querySelector('[name=name]').focus(), 60);
+  return win;
 }
 
 /* Live limit adjustment — the "drag a slider from London" requirement. Applied
@@ -1061,26 +1158,50 @@ function editLimits(f, done) {
   return win;
 }
 
-function appMedia() {
-  return el(`<div class="crumb"><a>Library</a><s>/</s><a>Films</a></div>
-    <div class="flist">
-      <div class="f"><span class="ic">▶</span><span class="nm">turntable_final.mp4</span><span class="sz">218 MB</span></div>
-      <div class="f"><span class="ic">▶</span><span class="nm">timelapse_batch.mp4</span><span class="sz">1.4 GB</span></div>
-    </div>
-    <div class="pv" style="margin-top:14px">
-      <div class="frame">Transcode · h264_nvenc</div>
-      <div class="meta">Hardware path on the RTX 3060 · streams to phone over the tailnet</div>
-    </div>`);
-}
-
 function appTimeline() {
-  return el(`<div class="rows">
-      <div class="row"><span class="rk">23:11:26</span><span class="rv" style="color:var(--ink-dim)">kill refused · pid 1 protected</span></div>
-      <div class="row"><span class="rk">21:40:55</span><span class="rv" style="color:var(--red)">session lost · kill(-1) from test suite</span></div>
-      <div class="row"><span class="rk">21:26:00</span><span class="rv" style="color:var(--ink-dim)">log mirror installed</span></div>
-      <div class="row"><span class="rk">19:30:15</span><span class="rv" style="color:var(--red)">Hyprland SIGSEGV · dwindle layout</span></div>
-      <div class="row"><span class="rk">19:10:37</span><span class="rv" style="color:var(--amber)">zram resized 46 → 15.4 GiB</span></div>
-    </div>`);
+  const d = el('<div class="tl"></div>');
+  let timer = null;
+
+  const ago = unix => {
+    const s = Math.max(0, Math.floor(Date.now() / 1000) - unix);
+    if (s < 60) return s + 's ago';
+    if (s < 3600) return Math.floor(s / 60) + 'm ago';
+    if (s < 86400) return Math.floor(s / 3600) + 'h ago';
+    return Math.floor(s / 86400) + 'd ago';
+  };
+
+  async function render() {
+    let events;
+    try { events = await API.get('/api/events'); } catch { return; }
+
+    if (!events.length) {
+      d.innerHTML = '<div class="empty">nothing recorded yet</div>';
+      return;
+    }
+    d.innerHTML = '';
+    for (const e of events) {
+      const row = document.createElement('div');
+      row.className = 'ev ' + e.level;
+      const time = new Date(e.unix * 1000).toLocaleTimeString('en-GB');
+      row.innerHTML = `<span class="t">${time}</span>
+        <span class="src">${e.source}</span>
+        <span class="msg"></span>
+        <span class="rel">${ago(e.unix)}</span>`;
+      row.querySelector('.msg').textContent = e.message;
+      if (e.detail) {
+        const dt = document.createElement('div');
+        dt.className = 'evdetail';
+        dt.textContent = e.detail;
+        row.append(dt);
+      }
+      d.append(row);
+    }
+  }
+
+  render();
+  timer = setInterval(() => d.isConnected ? render() : clearInterval(timer), 5000);
+  d.__onClose = () => clearInterval(timer);
+  return d;
 }
 
 /* Gallery — the app the operator singled out.
@@ -1251,7 +1372,6 @@ function appTerminal(existingId) {
       try { await document.fonts.load('13px PrismTerm'); } catch {}
     }
     term.open(host);
-    // The element has no size until it is in the document.
     requestAnimationFrame(() => { try { fit.fit(); } catch {} });
 
     if (!sid) {
@@ -1269,17 +1389,48 @@ function appTerminal(existingId) {
     }
 
     const win = d.closest('.win');
-    if (win) win.querySelector('.meta').innerHTML = '<span class="termbadge live">attached</span>';
+    const badge = html => { if (win) win.querySelector('.meta').innerHTML = html; };
+    let attempt = 0, closed = false, reconnecting = false;
 
-    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    ws = new WebSocket(`${proto}://${location.host}/api/term/${sid}/attach`);
-    ws.binaryType = 'arraybuffer';
+    function connect() {
+      if (closed) return;
+      const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+      ws = new WebSocket(`${proto}://${location.host}/api/term/${sid}/attach`);
+      ws.binaryType = 'arraybuffer';
 
-    ws.onmessage = e => term.write(new Uint8Array(e.data));
-    ws.onopen = () => { try { term.focus(); } catch {} };
-    ws.onclose = () => {
-      if (win) win.querySelector('.meta').innerHTML = '<span class="termbadge det">detached</span>';
-    };
+      ws.onopen = () => {
+        attempt = 0;
+        badge('<span class="termbadge live">attached</span>');
+        try { term.focus(); } catch {}
+      };
+
+      // Every attach replays scrollback from the beginning. On a reconnect that
+      // would print the whole history a second time, so the screen is cleared
+      // before the replay lands.
+      let replayed = false;
+      ws.onmessage = e => {
+        if (!replayed) {
+          replayed = true;
+          if (reconnecting) term.reset();
+        }
+        term.write(new Uint8Array(e.data));
+      };
+
+      ws.onclose = () => {
+        if (closed) return;
+        // The session is untouched by a dropped socket, so reconnecting simply
+        // reattaches — scrollback replays and the workload never noticed. This
+        // is why an idle socket timing out is invisible rather than fatal.
+        attempt++;
+        reconnecting = true;
+        badge('<span class="termbadge det">reconnecting…</span>');
+        setTimeout(connect, Math.min(500 * 2 ** (attempt - 1), 10000));
+      };
+      ws.onerror = () => { try { ws.close(); } catch {} };
+    }
+    connect();
+    d.__stopReconnect = () => { closed = true; };
+
     // Keystrokes as raw bytes; escape sequences must survive intact.
     term.onData(data => {
       if (ws && ws.readyState === 1) ws.send(new TextEncoder().encode(data));
@@ -1296,7 +1447,11 @@ function appTerminal(existingId) {
   requestAnimationFrame(() => { ro.observe(host); start(); });
 
   // Closing the window detaches only. Kill is a separate, explicit action.
-  d.__onClose = () => { if (ws) ws.close(); ro.disconnect(); };
+  d.__onClose = () => {
+    if (d.__stopReconnect) d.__stopReconnect();
+    if (ws) ws.close();
+    ro.disconnect();
+  };
   d.__kill = async () => {
     if (sid) { try { await API.post(`/api/term/${sid}/kill`); } catch {} }
   };
@@ -1305,10 +1460,9 @@ function appTerminal(existingId) {
 }
 
 const APPS = {
-  vitals:   { title: 'Vitals',   w: 348, h: 400, make: appVitals },
+  vitals:   { title: 'Vitals',   w: 348, h: 400, make: () => appVitals() },
   files:    { title: 'Files',    w: 430, h: 380, make: () => appFiles() },
   facets:   { title: 'Facets',   w: 392, h: 286, make: appFacets },
-  media:    { title: 'Media',    w: 400, h: 360, make: appMedia },
   timeline: { title: 'Timeline', w: 420, h: 240, make: appTimeline },
   gallery:  { title: 'Gallery',  w: 640, h: 520, multi: true,
               make: () => appGallery(lastBrowsed.root || (ROOTS[0] && ROOTS[0].name) || '',
@@ -1327,7 +1481,7 @@ function launch(app) {
 
 /* ── dock ────────────────────────────────────────────────── */
 const dock = $('#dock');
-['vitals','files','gallery','terminal','facets','media','timeline'].filter(a => APPS[a]).forEach(app => {
+['vitals','files','gallery','terminal','facets','timeline'].filter(a => APPS[a]).forEach(app => {
   const b = document.createElement('div');
   b.className = 'dockitem'; b.dataset.app = app;
   b.innerHTML = svg(app) + `<span class="run"></span><span class="tip">${APPS[app].title}</span>`;
@@ -1523,6 +1677,92 @@ async function refreshVitals() {
   } catch (e) { /* auth handled in API.get */ }
 }
 
+/* ── workspace persistence ───────────────────────────────────
+   Layout lives on the host, not in localStorage: open a window on the laptop
+   and it should be there on the tablet. Same target, same cloud PC. */
+let restoring = false;
+let saveTimer = null;
+
+function snapshot() {
+  return {
+    v: 1,
+    windows: [...wins.values()]
+      .filter(w => SAVEABLE.has(w.app))
+      .map(w => ({
+        app: w.app,
+        args: w.args || null,
+        x: parseInt(w.el.style.left) || 0,
+        y: parseInt(w.el.style.top) || 0,
+        w: parseInt(w.el.style.width) || 400,
+        h: parseInt(w.el.style.height) || 320,
+        z: parseInt(w.el.style.zIndex) || 10,
+        min: w.el.classList.contains('min'),
+        max: w.el.classList.contains('max')
+      }))
+  };
+}
+
+/* Windows whose contents are reproducible from arguments alone. A Preview or a
+   Limits dialog is transient and restoring one would be noise; a terminal is
+   restored by reattaching to its session, which is handled separately. */
+const SAVEABLE = new Set(['vitals', 'files', 'facets', 'gallery', 'timeline']);
+
+function scheduleSave() {
+  if (restoring) return;
+  clearTimeout(saveTimer);
+  // Coalesced: dragging a window fires continuously and each move must not be
+  // a request.
+  saveTimer = setTimeout(async () => {
+    try {
+      await fetch('/api/workspace', {
+        method: 'PUT', credentials: 'same-origin',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(snapshot())
+      });
+    } catch {}
+  }, 800);
+}
+
+async function restore() {
+  let state = null;
+  try { state = await API.get('/api/workspace'); } catch { return false; }
+  if (!state || !Array.isArray(state.windows) || !state.windows.length) return false;
+
+  restoring = true;
+  for (const w of state.windows) {
+    const a = APPS[w.app];
+    if (!a) continue;                       // an app this build no longer has
+    try {
+      const win = makeWindow({
+        app: w.app, title: a.title, w: w.w, h: w.h, x: w.x, y: w.y,
+        content: a.make(w.args)
+      });
+      win.args = w.args;
+      win.el.style.zIndex = w.z;
+      if (w.min) win.el.classList.add('min');
+      if (w.max) win.el.classList.add('max');
+    } catch {}
+  }
+  syncDock();
+  restoring = false;
+  return true;
+}
+
+/* Reattach any terminal sessions still alive on the host. Their windows are not
+   in the layout snapshot because the session id is the real state — the host
+   knows what is running, and the browser should not second-guess it. */
+async function restoreTerminals() {
+  let data;
+  try { data = await API.get('/api/term'); } catch { return; }
+  for (const s of (data.sessions || [])) {
+    if (s.exited) continue;
+    makeWindow({
+      app: 'terminal', title: 'Terminal', meta: s.title,
+      w: 620, h: 380, content: appTerminal(s.id)
+    });
+  }
+}
+
 /* A deliberate, minimal external surface. Used to drive the shell in tests,
    and the seam a future deep link (/#files/comfy-output/...) would use. */
 window.prism = {
@@ -1548,9 +1788,18 @@ async function boot() {
   hideLogin();
   await refreshVitals();
   setInterval(refreshVitals, 2000);
-  loadRoots();
-  launch('vitals');
-  launch('files');
+  // Awaited: Files opened before this resolved and rendered as though no roots
+  // were configured at all.
+  await loadRoots();
+
+  // Layout comes from the host, so the same desktop appears on every device.
+  const restored = await restore();
+  await restoreTerminals();
+  if (!restored) {
+    // First visit against this host: a sensible starting desktop.
+    launch('vitals');
+    launch('files');
+  }
 }
 boot();
 })();

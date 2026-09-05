@@ -7,6 +7,7 @@
 
 pub mod auth;
 pub mod config;
+pub mod events;
 pub mod files;
 pub mod gate;
 pub mod governor;

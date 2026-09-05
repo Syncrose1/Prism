@@ -30,6 +30,7 @@ pub struct Monitor {
     vitals: SharedVitals,
     disk_paths: Vec<std::path::PathBuf>,
     terminals: std::sync::Arc<prism_core::term::session::SessionManager>,
+    events: std::sync::Arc<prism_core::events::EventLog>,
 }
 
 impl Monitor {
@@ -37,6 +38,7 @@ impl Monitor {
         profile: Profile,
         vitals: SharedVitals,
         terminals: std::sync::Arc<prism_core::term::session::SessionManager>,
+        events: std::sync::Arc<prism_core::events::EventLog>,
     ) -> Self {
         let (storms, skipped) = StormDetector::new(profile.storm);
         for reason in &skipped {
@@ -69,6 +71,7 @@ impl Monitor {
             vitals,
             disk_paths,
             terminals,
+            events,
         }
     }
 
@@ -118,6 +121,22 @@ impl Monitor {
                     // luxury a failing machine cannot afford.
                     crate::term_api::apply_tier(&self.terminals, tier);
                     self.terminals.reap();
+
+                    self.events.push_detailed(
+                        match tier {
+                            prism_core::governor::Tier::Green => prism_core::events::Level::Info,
+                            prism_core::governor::Tier::Amber => prism_core::events::Level::Warn,
+                            _ => prism_core::events::Level::Error,
+                        },
+                        "governor",
+                        format!("tier {}", tier.as_str()),
+                        Some(format!(
+                            "{:?} · {:.1}% stall · {:.1} GiB honest headroom",
+                            self.governor.driver(),
+                            stall.full * 100.0,
+                            mem.honest_headroom_gib()
+                        )),
+                    );
 
                     warn!(
                         tier = tier.as_str(),
@@ -169,6 +188,11 @@ impl Monitor {
         let rss_mib = process::total_rss_kb(verdict.pids.iter().copied()) / 1024;
 
         if verdict.suppressed {
+            self.events.push(
+                prism_core::events::Level::Error,
+                "storm",
+                format!("`{}` recurring after repeated interventions", verdict.rule_id),
+            );
             error!(
                 rule = %verdict.rule_id,
                 count = verdict.count,
@@ -191,6 +215,20 @@ impl Monitor {
             StormAction::Notify => {}
             StormAction::KillMatched => {
                 let gone = action::terminate(&verdict.pids, TERM_GRACE);
+                // An intervention is recorded with the same weight as an
+                // observation, so a later analysis can subtract Prism's own
+                // hand from the timeline it is reading.
+                self.events.push_detailed(
+                    prism_core::events::Level::Action,
+                    "storm",
+                    format!("contained `{}`", verdict.rule_id),
+                    Some(format!(
+                        "terminated {} of {} processes, {} MiB reclaimed",
+                        gone.len(),
+                        verdict.pids.len(),
+                        rss_mib
+                    )),
+                );
                 info!(
                     rule = %verdict.rule_id,
                     killed = gone.len(),

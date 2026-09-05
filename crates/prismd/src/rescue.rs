@@ -230,9 +230,10 @@ async fn page(State(state): State<AppState>, headers: HeaderMap) -> Response {
 
     // --- facets -----------------------------------------------------------
     let supervisor = Supervisor::new();
-    if !state.facets.is_empty() {
+    let facets = state.facets.read().expect("facets poisoned").clone();
+    if !facets.is_empty() {
         html.push_str("<h2>Facets</h2><table><tr><th>Facet</th><th>State</th><th class=\"n\">Memory</th><th></th></tr>");
-        for facet in state.facets.iter() {
+        for facet in facets.iter() {
             let status = supervisor.status(&facet.id);
             let mem = supervisor
                 .memory_current_kb(&facet.id)
