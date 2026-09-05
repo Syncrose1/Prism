@@ -266,6 +266,28 @@ body {
 .pv .meta { font-size: 11px; color: var(--ink-faint); text-align: center; }
 .pv .meta b { color: var(--ink-dim); font-weight: 500; }
 
+/* Terminal */
+.term {
+  height: 100%; margin: -13px; padding: 11px 12px; overflow: auto;
+  background: #06070a; color: #cfd6df; font-size: 12.5px; line-height: 1.45;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.term .p  { color: var(--green); }
+.term .d  { color: var(--ink-ghost); }
+.term .hi { color: var(--ink); }
+.term .cur {
+  display: inline-block; width: 7px; height: 15px; vertical-align: text-bottom;
+  background: var(--ink); animation: blink 1.1s steps(2) infinite;
+}
+@keyframes blink { 50% { opacity: 0 } }
+.termbadge {
+  display: inline-block; padding: 1px 6px; border-radius: 2px; font-size: 9.5px;
+  letter-spacing: .14em; text-transform: uppercase; border: 1px solid var(--line-hi);
+  color: var(--ink-ghost);
+}
+.termbadge.live { color: var(--green); border-color: rgba(74,222,128,.4); }
+.termbadge.det  { color: var(--amber); border-color: rgba(251,191,36,.4); }
+
 /* Facets */
 .facet { border: 1px solid var(--line); border-radius: var(--r); padding: 10px 11px; margin-bottom: 8px; background: var(--base); }
 .facet .top { display: flex; align-items: center; gap: 8px; margin-bottom: 9px; }
@@ -420,7 +442,8 @@ const ICON = {
   facets:  '<rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/><path d="M6.5 7h.01M6.5 17h.01"/>',
   media:   '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M10.5 9.5l4.5 2.5-4.5 2.5z"/>',
   timeline:'<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
-  preview: '<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="M4 17l5-4 4 3 3-2 4 3"/>'
+  preview: '<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="M4 17l5-4 4 3 3-2 4 3"/>',
+  terminal:'<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9.5l3 2.5-3 2.5M12.5 15h4"/>'
 };
 const svg = k => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${ICON[k]}</svg>`;
 
@@ -468,7 +491,7 @@ function makeWindow({ id, app, title, meta = '', w = 380, h = 320, x, y, content
   el.querySelector('.body').append(content);
   desk.append(el);
 
-  const win = { id: wid, app, el, restore: null };
+  const win = { id: wid, app, el, restore: null, snapped: false, preSnap: null };
   wins.set(wid, win);
   wire(win);
   focus(win);
@@ -509,8 +532,25 @@ function wire(win) {
   bar.addEventListener('pointerdown', e => {
     if (e.target.closest('.wb')) return;
     if (el.classList.contains('max')) toggleMax(win);
-    const d = desk.getBoundingClientRect(), r = el.getBoundingClientRect();
-    const ox = e.clientX - r.left, oy = e.clientY - r.top;
+    const d = desk.getBoundingClientRect();
+    let r = el.getBoundingClientRect();
+    let ox = e.clientX - r.left, oy = e.clientY - r.top;
+
+    // Dragging a snapped window off the wall restores the geometry it had
+    // before snapping, rather than carrying the half-screen size around with
+    // it. The cursor is kept at the same proportional point along the title
+    // bar so the window does not jump out from under the pointer.
+    if (win.snapped) {
+      const frac = ox / r.width;
+      Object.assign(el.style, win.preSnap);
+      win.snapped = false;
+      r = el.getBoundingClientRect();
+      ox = frac * r.width;
+      oy = Math.min(oy, 33);
+      el.style.left = (e.clientX - d.left - ox) + 'px';
+      el.style.top  = (e.clientY - d.top  - oy) + 'px';
+    }
+
     bar.setPointerCapture(e.pointerId);
     let zone = null;
 
@@ -535,11 +575,16 @@ function wire(win) {
       bar.removeEventListener('pointerup', up);
       snap.style.display = 'none';
       if (zone) {
+        // Remember the floating geometry so un-snapping can return to it.
+        if (!win.snapped) {
+          win.preSnap = { left: el.style.left, top: el.style.top, width: el.style.width, height: el.style.height };
+        }
         const d2 = desk.getBoundingClientRect();
         const box = zone === 'l' ? [0,0,d2.width/2,d2.height]
                   : zone === 'r' ? [d2.width/2,0,d2.width/2,d2.height]
                   : [0,0,d2.width,d2.height];
         Object.assign(el.style, { left:box[0]+'px', top:box[1]+'px', width:box[2]+'px', height:box[3]+'px' });
+        win.snapped = true;
       }
     };
     bar.addEventListener('pointermove', move);
@@ -551,6 +596,7 @@ function wire(win) {
     e.stopPropagation();
     const r = el.getBoundingClientRect(), sx = e.clientX, sy = e.clientY;
     rz.setPointerCapture(e.pointerId);
+    win.snapped = false;
     const move = ev => {
       el.style.width  = Math.max(280, r.width  + ev.clientX - sx) + 'px';
       el.style.height = Math.max(160, r.height + ev.clientY - sy) + 'px';
@@ -686,18 +732,93 @@ function appTimeline() {
     </div>`);
 }
 
+/* A simulated terminal. The real one attaches to /api/term/{id}/attach over a
+   WebSocket and renders with xterm.js; this reproduces the interaction so the
+   lifecycle — detach keeps running, kill destroys — can be seen in the design. */
+let termSeq = 0;
+function appTerminal() {
+  const id = 'term-' + (++termSeq);
+  const d = el(`<div class="term" tabindex="0"></div>`);
+  const view = d.querySelector('.term');
+  const state = { line: '', running: null, cwd: '~' };
+
+  const CWD = () => `<span class="p">raahats@c2</span><span class="d">:</span><span class="hi">${state.cwd}</span><span class="d">$</span> `;
+  let out = `Prism terminal · session ${id} · scope prism-${id}.scope\n\n`;
+
+  function paint() {
+    view.innerHTML = out + (state.running ? '' : CWD() + esc(state.line) + '<span class="cur"></span>');
+    view.scrollTop = view.scrollHeight;
+  }
+  function esc(t) { return t.replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+  function say(t) { out += t; paint(); }
+
+  // The operator's real script: prompts twice, then launches.
+  const SCRIPT = {
+    steps: [
+      'ComfyUI-Easy-Install\nPress Enter to continue: ',
+      '\nConfirm GPU (Enter): ',
+      '\nLAUNCHED: serving on 127.0.0.1:8188\n'
+    ]
+  };
+
+  function run(cmd) {
+    say(CWD() + esc(cmd) + '\n');
+    const c = cmd.trim();
+    if (c === 'clear') { out = ''; return paint(); }
+    if (c.startsWith('cd ')) { state.cwd = '~/' + c.slice(3).replace(/^~\/?/, ''); return paint(); }
+    if (c === 'ls') { return say('ComfyUI  llama.cpp  Documents  Prism\n'); }
+    if (c.includes('run_nvidia_gpu.sh') || c.includes('fake_comfy')) {
+      state.running = { step: 0 };
+      say(SCRIPT.steps[0]);
+      const w = d.closest('.win');
+      if (w) w.querySelector('.meta').innerHTML = '<span class="termbadge live">running</span>';
+      return;
+    }
+    if (c === '') return paint();
+    say(`prism: command not found: ${esc(c)}\n`);
+  }
+
+  view.addEventListener('keydown', e => {
+    e.preventDefault();
+    if (state.running) {
+      // Answering a prompt — the thing a pipe could never do.
+      if (e.key === 'Enter') {
+        state.running.step++;
+        const next = SCRIPT.steps[state.running.step];
+        if (next) say(next);
+        if (state.running.step >= SCRIPT.steps.length - 1) {
+          say('\n(workload running — closing this window detaches, it keeps going)\n');
+          state.running = null;
+          paint();
+        }
+      }
+      return;
+    }
+    if (e.key === 'Enter') { const c = state.line; state.line = ''; run(c); }
+    else if (e.key === 'Backspace') { state.line = state.line.slice(0, -1); paint(); }
+    else if (e.key.length === 1) { state.line += e.key; paint(); }
+  });
+
+  setTimeout(() => view.focus(), 60);
+  paint();
+  return d;
+}
+
 const APPS = {
   vitals:   { title: 'Vitals',   w: 348, h: 400, make: appVitals },
   files:    { title: 'Files',    w: 396, h: 330, make: () => appFiles('ComfyUI/output') },
   facets:   { title: 'Facets',   w: 392, h: 286, make: appFacets },
   media:    { title: 'Media',    w: 400, h: 360, make: appMedia },
-  timeline: { title: 'Timeline', w: 420, h: 240, make: appTimeline }
+  timeline: { title: 'Timeline', w: 420, h: 240, make: appTimeline },
+  terminal: { title: 'Terminal', w: 520, h: 320, make: appTerminal, multi: true }
 };
 
 function launch(app) {
   const a = APPS[app]; if (!a) return;
-  const existing = [...wins.values()].find(w => w.app === app);
-  if (existing) { focus(existing); return; }
+  if (!a.multi) {
+    const existing = [...wins.values()].find(w => w.app === app);
+    if (existing) { focus(existing); return; }
+  }
   makeWindow({ app, title: a.title, w: a.w, h: a.h, content: a.make() });
 }
 
@@ -709,7 +830,7 @@ Object.keys(APPS).forEach(app => {
   b.innerHTML = svg(app) + `<span class="run"></span><span class="tip">${APPS[app].title}</span>`;
   b.onclick = () => {
     const open = [...wins.values()].filter(w => w.app === app);
-    if (!open.length) return launch(app);
+    if (!open.length || APPS[app].multi) return launch(app);
     const focused = open.find(w => w.el.classList.contains('focus') && !w.el.classList.contains('min'));
     if (focused) { focused.el.classList.add('min'); syncDock(); } else focus(open[0]);
   };
@@ -834,7 +955,7 @@ setInterval(() => {
 /* ── boot ────────────────────────────────────────────────── */
 launch('vitals');
 launch('files');
-launch('facets');
+launch('terminal');
 setTier('green');
 })();
 </script>
