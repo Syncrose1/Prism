@@ -36,6 +36,111 @@ pub fn routes() -> Router<AppState> {
         .route("/api/files/rename", post(rename))
         .route("/api/files/delete", post(delete))
         .route("/api/files/upload", post(upload))
+        .route("/api/files/media", get(media_info))
+        .route("/api/files/stream", get(stream))
+}
+
+/// What would be needed to play this file, from its actual streams.
+async fn media_info(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<FileQuery>,
+) -> Response {
+    if let Some(d) = guard(&state, &headers) {
+        return d;
+    }
+    let (_root, full) = match resolve(&state, &q.root, &q.path) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    Json(crate::media::probe(&full).await).into_response()
+}
+
+#[derive(Deserialize)]
+struct StreamQuery {
+    root: String,
+    path: String,
+    /// Seconds to seek to before starting. Restarting ffmpeg at an offset is
+    /// how seeking works in a transcoded stream; there is no index to jump in.
+    #[serde(default)]
+    t: Option<f64>,
+}
+
+/// Transcode on the fly for a file the browser cannot decode.
+///
+/// Only for that case: anything playable is served by `/api/files/raw`, which
+/// costs nothing and supports real seeking. This endpoint exists so that an
+/// MKV or an HEVC file is watchable at all rather than a black rectangle.
+async fn stream(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<StreamQuery>,
+) -> Response {
+    if let Some(d) = guard(&state, &headers) {
+        return d;
+    }
+
+    // Transcoding is the most expensive thing Prism does. On a machine already
+    // short of memory it is exactly the wrong thing to start.
+    let tier = state.vitals.read().expect("vitals poisoned").tier.clone();
+    if matches!(tier.as_str(), "red" | "black") {
+        return err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "degraded",
+            "the machine is under pressure; transcoding is suspended",
+        );
+    }
+
+    let (_root, full) = match resolve(&state, &q.root, &q.path) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+
+    let info = crate::media::probe(&full).await;
+    if matches!(info.playability, crate::media::Playability::Unknown) {
+        return err(StatusCode::BAD_REQUEST, "not_media", "not a media file");
+    }
+
+    let args = crate::media::transcode_args(
+        &full,
+        &info,
+        q.t.unwrap_or(0.0).max(0.0),
+        state.nvenc,
+    );
+
+    let mut child = match tokio::process::Command::new("ffmpeg")
+        .args(&args)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        // Killed when the response is dropped, so a client that seeks away or
+        // closes the tab does not leave an encoder running on the GPU.
+        .kill_on_drop(true)
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, "ffmpeg_failed", e.to_string()),
+    };
+
+    let Some(stdout) = child.stdout.take() else {
+        return err(StatusCode::INTERNAL_SERVER_ERROR, "no_output", "ffmpeg produced no output");
+    };
+
+    // The child is moved into the stream's lifetime, so it lives exactly as
+    // long as the response body does.
+    let stream = tokio_util::io::ReaderStream::new(stdout);
+    let body = Body::from_stream(futures_util::StreamExt::map(stream, move |chunk| {
+        let _keep_alive = &child;
+        chunk
+    }));
+
+    Response::builder()
+        .header(header::CONTENT_TYPE, "video/mp4")
+        // A transcoded stream has no length and cannot be range-requested; the
+        // client seeks by asking for a new stream at an offset instead.
+        .header(header::CACHE_CONTROL, "no-store")
+        .header(header::ACCEPT_RANGES, "none")
+        .body(body)
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
 /// Resolve a *writable* root, refusing when it is read-only.

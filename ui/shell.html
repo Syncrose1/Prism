@@ -314,6 +314,20 @@ body {
 .frameapp .direct .cav { color: var(--ink-ghost); font-size: 11px; max-width: 34ch; }
 .frameapp .direct code { color: var(--ink-faint); }
 
+/* Music */
+.music { position: absolute; inset: 0; display: flex; flex-direction: column; background: #06070a; }
+.music .now { padding: 14px 14px 8px; flex: 0 0 auto; }
+.music .mt { color: var(--ink); font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.music .ms { color: var(--ink-ghost); font-size: 10.5px; margin-top: 3px; }
+.music audio { width: calc(100% - 28px); margin: 0 14px 10px; flex: 0 0 auto; }
+.music .queue { flex: 1; overflow-y: auto; border-top: 1px solid var(--line); padding: 6px; min-height: 0; }
+.music .q { display: flex; gap: 10px; padding: 5px 8px; border-radius: var(--r); cursor: pointer; font-size: 11.5px; }
+.music .q:hover { background: var(--raised); }
+.music .q.on { background: var(--raised); box-shadow: inset 0 0 0 1px var(--line-hi); }
+.music .qn { color: var(--ink-ghost); font-variant-numeric: tabular-nums; flex: 0 0 20px; text-align: right; }
+.music .ql { color: var(--ink-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.music .q.on .ql { color: var(--ink); }
+
 /* Timeline */
 .tl { display: grid; gap: 1px; }
 .ev {
@@ -357,6 +371,12 @@ body {
   border-top: 1px solid var(--line); background: var(--base); flex: 0 0 auto;
 }
 .gal .hud .nm { color: var(--ink-dim); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gal .hud .tbadge {
+  font-size: 9.5px; letter-spacing: .14em; text-transform: uppercase;
+  color: var(--amber); border: 1px solid rgba(251,191,36,.35);
+  border-radius: 2px; padding: 1px 6px; margin-left: auto;
+}
+.gal .hud .tbadge + .ct { margin-left: 10px; }
 .gal .hud .ct { color: var(--ink-ghost); font-size: 10.5px; font-variant-numeric: tabular-nums; margin-left: auto; flex: 0 0 auto; }
 .gal .strip {
   display: flex; gap: 4px; padding: 6px 8px; overflow-x: auto; overflow-y: hidden;
@@ -860,7 +880,14 @@ function appFiles(startRoot, startPath = '') {
 
   function open(e) {
     if (e.is_dir) { path = rel(e.name); search.value = ''; filter = ''; render(); return; }
-    if (VIEWABLE.has(e.kind)) {
+    if (e.kind === 'audio') {
+      // A folder of audio is an album; the player queues the rest of it.
+      makeWindow({
+        app: 'music', title: 'Music', meta: e.name, w: 380, h: 460,
+        args: { root, path, name: e.name },
+        content: appMusic(root, path, e.name)
+      });
+    } else if (VIEWABLE.has(e.kind)) {
       // Gallery opens on the selection and groups the whole directory around
       // it, which is the only context in which grouping means anything.
       makeWindow({
@@ -1392,6 +1419,18 @@ function appGallery(root, dirPath, startName) {
   let items = [], i = 0;
 
   const rawUrl = e => `/api/files/raw?root=${encodeURIComponent(root)}&path=${encodeURIComponent(e.path)}`;
+  // Says when the bytes are not the original — a transcode is slower to seek
+  // and worth admitting rather than leaving the operator to wonder.
+  const badge = text => {
+    let b = d.querySelector('.tbadge');
+    if (!b) {
+      b = document.createElement('span');
+      b.className = 'tbadge';
+      d.querySelector('.hud').insertBefore(b, d.querySelector('.ct'));
+    }
+    b.textContent = text;
+    b.style.display = text ? '' : 'none';
+  };
   const thumbUrl = e => `/api/files/thumb?root=${encodeURIComponent(root)}&path=${encodeURIComponent(e.path)}`;
 
   function show(n) {
@@ -1402,21 +1441,37 @@ function appGallery(root, dirPath, startName) {
 
     stage.querySelectorAll('img,video,.miss').forEach(x => x.remove());
     const node = document.createElement(e.kind === 'video' ? 'video' : 'img');
-    node.src = rawUrl(e);
-    if (e.kind === 'video') { node.controls = true; node.autoplay = false; node.preload = 'metadata'; }
+    if (e.kind === 'video') {
+      node.controls = true;
+      node.autoplay = false;
+      node.preload = 'metadata';
+      // Ask what the file actually contains rather than trusting its
+      // extension: an .mkv of H.264 needs a container change, not a GPU.
+      node.src = rawUrl(e);
+      API.get(`/api/files/media?root=${encodeURIComponent(root)}&path=${encodeURIComponent(e.path)}`)
+        .then(info => {
+          if (!stage.contains(node)) return;      // moved on already
+          if (info.playability.kind !== 'direct') {
+            node.src = `/api/files/stream?root=${encodeURIComponent(root)}&path=${encodeURIComponent(e.path)}`;
+            badge(info.playability.kind === 'remux' ? 'remuxing' : 'transcoding');
+          }
+        })
+        .catch(() => {});
+    } else {
+      node.src = rawUrl(e);
+    }
     node.onerror = () => {
       node.remove();
       const m = document.createElement('span');
       m.className = 'miss';
-      m.textContent = e.kind === 'video'
-        ? 'this browser cannot decode this video'
-        : 'could not load';
+      m.textContent = e.kind === 'video' ? 'could not play this video' : 'could not load';
       stage.prepend(m);
     };
     stage.prepend(node);
 
     nameEl.textContent = e.name;
     countEl.textContent = `${i + 1} / ${items.length}`;
+    badge('');
     const win = d.closest('.win');
     if (win) win.querySelector('.meta').textContent = e.name;
 
@@ -1586,6 +1641,105 @@ function appProxy(facet) {
   return d;
 }
 
+/* Music: a directory is an album.
+   The same grouping idea as Gallery, because the operator's audio lives in
+   folders rather than in a library with a database. Media Session is wired up
+   so the phone's lock screen controls it — which is the actual use case for
+   audio from a machine in another city. */
+function appMusic(root, dirPath, startName) {
+  const d = el(`<div class="music">
+      <div class="now"><div class="mt"></div><div class="ms"></div></div>
+      <audio controls></audio>
+      <div class="queue"></div>
+    </div>`);
+  const audio = d.querySelector('audio');
+  const title = d.querySelector('.mt');
+  const sub = d.querySelector('.ms');
+  const queue = d.querySelector('.queue');
+  let items = [], i = 0;
+
+  const url = e => `/api/files/raw?root=${encodeURIComponent(root)}&path=${encodeURIComponent(e.path)}`;
+  // Strip a leading track number and the extension: folder audio is usually
+  // named for sorting, not for reading.
+  const pretty = n => n.replace(/\.[^.]+$/, '').replace(/^\d+[\s._-]+/, '');
+
+  function play(n) {
+    if (!items.length) return;
+    i = (n + items.length) % items.length;
+    const e = items[i];
+    audio.src = url(e);
+    audio.play().catch(() => {});   // autoplay may be blocked; controls remain
+    title.textContent = pretty(e.name);
+    sub.textContent = `${i + 1} of ${items.length} · ${dirPath || root}`;
+
+    queue.querySelectorAll('.q').forEach((q, k) => q.classList.toggle('on', k === i));
+    const active = queue.children[i];
+    if (active) active.scrollIntoView({ block: 'nearest' });
+
+    // Lock-screen and headset controls. Without this the phone shows nothing
+    // and the hardware buttons do nothing, which is most of the point.
+    if ('mediaSession' in navigator) {
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: pretty(e.name),
+        artist: dirPath.split('/').pop() || root,
+        album: 'Prism'
+      });
+      navigator.mediaSession.setActionHandler('previoustrack', () => play(i - 1));
+      navigator.mediaSession.setActionHandler('nexttrack', () => play(i + 1));
+      navigator.mediaSession.setActionHandler('play', () => audio.play());
+      navigator.mediaSession.setActionHandler('pause', () => audio.pause());
+    }
+
+    const win = d.closest('.win');
+    if (win) win.querySelector('.meta').textContent = pretty(e.name);
+  }
+
+  // Advancing on end is what makes a folder an album rather than a file.
+  audio.addEventListener('ended', () => play(i + 1));
+
+  async function load() {
+    let data;
+    try {
+      data = await API.get(`/api/files/list?root=${encodeURIComponent(root)}&path=${encodeURIComponent(dirPath)}&limit=1000`);
+    } catch (e) {
+      queue.innerHTML = `<div class="empty">${e.message || 'could not read folder'}</div>`;
+      return;
+    }
+    items = data.entries
+      .filter(e => !e.is_dir && e.kind === 'audio')
+      .map(e => ({ ...e, path: data.path ? `${data.path}/${e.name}` : e.name }));
+
+    if (!items.length) {
+      queue.innerHTML = '<div class="empty">no audio in this folder</div>';
+      return;
+    }
+
+    queue.innerHTML = '';
+    items.forEach((e, k) => {
+      const q = document.createElement('div');
+      q.className = 'q';
+      q.innerHTML = `<span class="qn">${k + 1}</span><span class="ql"></span>`;
+      q.querySelector('.ql').textContent = pretty(e.name);
+      q.onclick = () => play(k);
+      queue.append(q);
+    });
+
+    const start = startName ? items.findIndex(e => e.name === startName) : 0;
+    play(start < 0 ? 0 : start);
+  }
+
+  d.tabIndex = 0;
+  d.addEventListener('keydown', e => {
+    if (e.key === 'ArrowRight') { play(i + 1); e.preventDefault(); }
+    else if (e.key === 'ArrowLeft') { play(i - 1); e.preventDefault(); }
+    else if (e.key === ' ') { audio.paused ? audio.play() : audio.pause(); e.preventDefault(); }
+  });
+
+  d.__onClose = () => { audio.pause(); audio.src = ''; };
+  load();
+  return d;
+}
+
 /* The real terminal: xterm.js bound to a PTY on the host over a WebSocket.
    Closing the window detaches — the session and anything it launched keep
    running. Only Kill destroys, via cgroup.kill. See ADR 0003. */
@@ -1717,7 +1871,8 @@ function appTerminal(existingId) {
    selection in Files rather than as an empty app, which is the only way it has
    a directory to group. VIEWERS holds apps that are reachable only that way. */
 const VIEWERS = {
-  gallery: { title: 'Gallery', w: 720, h: 560, make: a => appGallery(a.root, a.path, a.name) }
+  gallery: { title: 'Gallery', w: 720, h: 560, make: a => appGallery(a.root, a.path, a.name) },
+  music:   { title: 'Music',   w: 380, h: 460, make: a => appMusic(a.root, a.path, a.name) }
 };
 
 const APPS = {
@@ -2070,7 +2225,7 @@ function snapshot() {
 /* Windows whose contents are reproducible from arguments alone. A Preview or a
    Limits dialog is transient and restoring one would be noise; a terminal is
    restored by reattaching to its session, which is handled separately. */
-const SAVEABLE = new Set(['vitals', 'files', 'facets', 'gallery', 'timeline']);
+const SAVEABLE = new Set(['vitals', 'files', 'facets', 'gallery', 'music', 'timeline']);
 
 function scheduleSave() {
   if (restoring) return;

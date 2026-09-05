@@ -17,6 +17,7 @@ mod monitor;
 mod enrol;
 mod facets_api;
 mod files_api;
+mod media;
 mod proxy;
 mod rescue;
 mod setup;
@@ -123,6 +124,8 @@ fn main() -> anyhow::Result<()> {
     let facets = Arc::new(RwLock::new(profile.facet.clone()));
     let profile_path = Arc::new(dir.join("profile.toml"));
     let events = Arc::new(prism_core::events::EventLog::new());
+    let nvenc = media::have_nvenc();
+    info!(nvenc, "media transcoding");
     let proxy_client = proxy::client();
     let proxy_tls_client = proxy::tls_client();
     let tls_backends = Arc::new(RwLock::new(std::collections::HashSet::new()));
@@ -184,7 +187,7 @@ fn main() -> anyhow::Result<()> {
 
     serve(
         host, auth, vitals, facets, terminals, roots, thumb_dir, profile_path, state_dir_arc,
-        events, proxy_client, proxy_tls_client, tls_backends,
+        events, proxy_client, proxy_tls_client, tls_backends, nvenc,
     )
 }
 
@@ -203,6 +206,7 @@ async fn serve(
     proxy_client: proxy::ProxyClient,
     proxy_tls_client: proxy::TlsProxyClient,
     tls_backends: Arc<RwLock<std::collections::HashSet<String>>>,
+    nvenc: bool,
 ) -> anyhow::Result<()> {
     let addr = bind::resolve(&host.server.bind, host.server.port)?;
     let listener = tokio::net::TcpListener::bind(addr)
@@ -223,6 +227,7 @@ async fn serve(
         proxy: proxy_client,
         proxy_tls: proxy_tls_client,
         tls_backends,
+        nvenc,
     });
 
     axum::serve(listener, app)

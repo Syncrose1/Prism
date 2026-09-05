@@ -90,6 +90,8 @@ pub struct AppState {
     pub profile_path: Arc<std::path::PathBuf>,
     pub state_dir: Arc<std::path::PathBuf>,
     pub events: Arc<prism_core::events::EventLog>,
+    /// Whether hardware encoding is available, decided once at startup.
+    pub nvenc: bool,
     pub proxy: crate::proxy::ProxyClient,
     pub proxy_tls: crate::proxy::TlsProxyClient,
     /// Facets discovered to require TLS, so the wasted plain attempt happens
