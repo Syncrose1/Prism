@@ -13,6 +13,7 @@ pub mod governor;
 pub mod safety;
 pub mod sensors;
 pub mod supervisor;
+pub mod term;
 pub mod watchdog;
 
 pub use gate::Gate;

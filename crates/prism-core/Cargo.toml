@@ -21,3 +21,8 @@ subtle = "2"
 
 # statvfs for the disk sensor. Also the only sane route to mlockall later.
 libc = "0.2"
+
+# `sync` only — broadcast channels for terminal output fan-out. This feature
+# pulls in no runtime, so prism-core stays executor-agnostic and the monitor
+# loop remains free of async.
+tokio = { version = "1", features = ["sync"] }
