@@ -106,12 +106,44 @@ impl From<&FacetLimits> for LimitsView {
     }
 }
 
+/// Is something already answering on this facet's exposed port?
+///
+/// Probes loopback specifically, because that is what the proxy connects to:
+/// a service reachable here is one Prism can serve, and one it cannot reach
+/// here it cannot serve whatever else it may be bound to. The two answers
+/// agree by construction rather than by coincidence.
+///
+/// Loopback connects resolve immediately — accepted or refused — so this does
+/// not sit in the status poll. The timeout only bounds the pathological case
+/// of a listener with a full backlog.
+fn port_answers(port: u16) -> bool {
+    use std::net::{Ipv4Addr, SocketAddr, TcpStream};
+    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+    TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(150)).is_ok()
+}
+
 fn view(facet: &Facet, sup: &Supervisor) -> FacetView {
-    let status = sup.status(&facet.id);
+    let mut status = sup.status(&facet.id);
+
+    // A workload started outside Prism — by hand, from a launcher, or from a
+    // Prism terminal rather than as a facet — leaves no unit of ours behind.
+    // Calling that "stopped" while the proxy serves it is a contradiction the
+    // operator sees immediately, so name it instead.
+    if status == FacetStatus::Stopped
+        && let Some(e) = &facet.expose
+        && port_answers(e.port)
+    {
+        status = FacetStatus::Foreign;
+    }
+
     let (state, detail) = match &status {
         FacetStatus::Running => ("running", None),
         FacetStatus::Stopped => ("stopped", None),
         FacetStatus::Failed(why) => ("failed", Some(why.clone())),
+        FacetStatus::Foreign => (
+            "foreign",
+            Some("running, but not started by Prism — no limits or kill".into()),
+        ),
     };
     let running = matches!(status, FacetStatus::Running);
     let gate = facet.enabled_if.evaluate();
@@ -377,6 +409,22 @@ async fn start(
     let sup = Supervisor::new();
     if matches!(sup.status(&id), FacetStatus::Running) {
         return err(StatusCode::CONFLICT, "already_running", "already running");
+    }
+    // Something else already holds the port. Starting a second copy would
+    // fail on bind, deep inside the workload's own logs, and look like Prism
+    // breaking. Say what is actually true instead.
+    if let Some(e) = &facet.expose
+        && port_answers(e.port)
+    {
+        return err(
+            StatusCode::CONFLICT,
+            "port_in_use",
+            format!(
+                "something is already serving port {} — it was not started by \
+                 Prism, so Prism cannot stop it either",
+                e.port
+            ),
+        );
     }
 
     match sup.start(&facet) {

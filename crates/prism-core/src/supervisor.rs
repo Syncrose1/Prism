@@ -32,6 +32,16 @@ pub enum FacetStatus {
     Stopped,
     Running,
     Failed(String),
+    /// The workload is up, but Prism did not start it: no unit of ours owns
+    /// it. Started by hand, from a desktop launcher, or from a Prism terminal
+    /// rather than as a facet.
+    ///
+    /// Distinguished from `Stopped` because reporting a listening service as
+    /// stopped is a lie the operator can see through — Prism's own proxy will
+    /// happily serve it — and distinguished from `Running` because there is no
+    /// cgroup to read, no limits to apply and nothing to kill. Prism can see
+    /// it and cannot manage it, which is exactly what the UI must say.
+    Foreign,
 }
 
 /// Build the `systemd-run` argument vector for a facet.
@@ -153,6 +163,12 @@ impl Supervisor {
         run_systemctl(&args)
     }
 
+    /// What systemd knows about this facet.
+    ///
+    /// Deliberately blind to whether some *other* process is serving the same
+    /// port: that is a network fact, not a unit fact, and resolving it here
+    /// would put a socket connect inside every status poll. Callers that care
+    /// upgrade `Stopped` to `Foreign` themselves.
     pub fn status(&self, facet_id: &str) -> FacetStatus {
         let unit = unit_name(facet_id);
         let Ok(output) = Command::new("systemctl")
