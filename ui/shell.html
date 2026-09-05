@@ -130,7 +130,68 @@ body {
   backdrop-filter: blur(20px);
   border-bottom: 1px solid var(--line);
 }
-.mark { display: flex; align-items: center; gap: 9px; }
+.mark {
+  display: flex; align-items: center; gap: 9px; cursor: pointer;
+  background: none; border: 0; padding: 4px 7px; margin-left: -4px;
+  border-radius: 6px; color: inherit; font: inherit;
+  transition: background .13s ease;
+}
+.mark:hover, .mark[aria-expanded="true"] { background: rgba(255,255,255,.055); }
+
+#sysmenupanel {
+  position: fixed; top: calc(var(--bar) + 5px); left: 9px; z-index: 500;
+  min-width: 232px; padding: 5px;
+  background: rgba(16,19,25,.985); border: 1px solid var(--line-hi);
+  border-radius: 8px; box-shadow: 0 22px 60px -18px rgba(0,0,0,.94);
+  animation: menuin .13s ease backwards;
+}
+@keyframes menuin { from { opacity: 0; transform: translateY(-5px); } }
+.mi {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 8px 10px; border: 0; border-radius: 5px; cursor: pointer;
+  background: none; color: var(--ink); font: inherit; font-size: 12.5px;
+  text-align: left;
+}
+.mi:hover { background: rgba(255,255,255,.07); }
+.mi .k { margin-left: auto; font-size: 10.5px; color: var(--ink-ghost); }
+.mi .g { width: 15px; text-align: center; color: var(--ink-dim); }
+.msep { height: 1px; background: var(--line); margin: 5px 8px; }
+.mhead {
+  padding: 7px 10px 5px; font-size: 10px; letter-spacing: .2em;
+  text-transform: uppercase; color: var(--ink-ghost);
+}
+
+/* Settings */
+.setwrap { display: flex; height: 100%; min-height: 0; }
+.setnav {
+  width: 132px; flex: none; border-right: 1px solid var(--line);
+  padding: 9px 7px; display: flex; flex-direction: column; gap: 2px;
+}
+.setnav button {
+  text-align: left; padding: 7px 9px; border: 0; border-radius: 5px;
+  background: none; color: var(--ink-dim); font: inherit; font-size: 12px;
+  cursor: pointer;
+}
+.setnav button:hover { color: var(--ink); background: rgba(255,255,255,.05); }
+.setnav button.on { color: var(--ink); background: rgba(255,255,255,.08); }
+.setpane { flex: 1; overflow-y: auto; padding: 14px 16px; min-width: 0; }
+.svc {
+  display: flex; align-items: center; gap: 11px; padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+.svc:last-child { border-bottom: 0; }
+.svc .who { min-width: 0; flex: 1; }
+.svc .t { font-size: 12.5px; }
+.svc .sub {
+  font-size: 11px; color: var(--ink-ghost); margin-top: 2px;
+  font-variant-numeric: tabular-nums;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.svc .claimed { font-size: 11px; color: var(--ink-ghost); }
+.pnote { font-size: 11.5px; color: var(--ink-ghost); line-height: 1.55; margin-bottom: 13px; }
+.kv { display: grid; grid-template-columns: 108px 1fr; gap: 7px 14px; font-size: 12px; }
+.kv dt { color: var(--ink-ghost); }
+.kv dd { font-variant-numeric: tabular-nums; word-break: break-all; }
 .mark .word { font-size: 11.5px; letter-spacing: .34em; text-transform: uppercase; font-weight: 500; }
 .host { color: var(--ink-faint); font-size: 11px; letter-spacing: .09em; padding-left: 16px; border-left: 1px solid var(--line); }
 .host b { color: var(--ink-dim); font-weight: 500; }
@@ -687,7 +748,7 @@ function interceptFilePicker(iframe, facet) {
 <div id="ambient"></div>
 
 <div id="topbar">
-  <div class="mark">
+  <button class="mark" id="sysmenu" aria-haspopup="true" aria-expanded="false">
     <svg width="24" height="18" viewBox="0 0 24 18" fill="none" aria-hidden="true">
       <path d="M0 8.2 H7.4" stroke="#e8ebf0" stroke-width="1.1"/>
       <path d="M8 14.4 L13.4 3.2 L18.8 14.4 Z" stroke="#5c6472" stroke-width="1.1" fill="none"/>
@@ -696,8 +757,8 @@ function interceptFilePicker(iframe, facet) {
       <path d="M18.6 13.9 H24" stroke="#fb7185" stroke-width="1.1"/>
     </svg>
     <span class="word">Prism</span>
-  </div>
-  <div class="host"><b>c2</b> · desktop-cachy02</div>
+  </button>
+  <div class="host" id="hostline"></div>
   <div class="spacer"></div>
   <button class="searchbtn" id="openPal"><span>Search apps, files, actions</span><kbd>⌘K</kbd></button>
   <div class="spectrum">
@@ -706,6 +767,8 @@ function interceptFilePicker(iframe, facet) {
   </div>
   <div class="clock" id="clock">00:00:00</div>
 </div>
+
+<div id="sysmenupanel" hidden></div>
 
 <main id="desk">
   <div id="deskbg"></div>
@@ -2208,7 +2271,8 @@ const APPS = {
   facets:   { title: 'Facets',   w: 392, h: 286, make: appFacets },
   timeline: { title: 'Timeline', w: 420, h: 240, make: appTimeline },
 
-  terminal: { title: 'Terminal', w: 560, h: 340, make: appTerminal, multi: true }
+  terminal: { title: 'Terminal', w: 560, h: 340, make: appTerminal, multi: true },
+  settings: { title: 'Settings', w: 560, h: 420, make: appSettings }
 };
 
 function launch(app) {
@@ -2238,6 +2302,218 @@ async function loadProxied() {
     };
   }
   renderDock();
+}
+
+/* Host identity, read from the machine rather than written into the page.
+   The shell used to carry a hostname as literal text: wrong on every machine
+   but one, and not something a published repository should contain. */
+let SYSTEM = { hostname: '', version: '', port: 0 };
+async function loadSystem() {
+  try { SYSTEM = await API.get('/api/system'); } catch { return; }
+  const line = $('#hostline');
+  if (!line) return;
+  line.innerHTML = '<b></b>';
+  line.querySelector('b').textContent = SYSTEM.hostname || 'this machine';
+}
+
+/* ── system menu ─────────────────────────────────────────── */
+const sysBtn = $('#sysmenu'), sysPanel = $('#sysmenupanel');
+
+function closeSysMenu() {
+  sysPanel.hidden = true;
+  sysBtn.setAttribute('aria-expanded', 'false');
+}
+
+function openSysMenu() {
+  sysPanel.innerHTML = '';
+  const item = (glyph, label, key, fn) => {
+    const b = document.createElement('button');
+    b.className = 'mi';
+    b.innerHTML = `<span class="g">${glyph}</span><span class="l"></span>${key ? `<span class="k">${key}</span>` : ''}`;
+    b.querySelector('.l').textContent = label;
+    b.onclick = () => { closeSysMenu(); fn(); };
+    return b;
+  };
+  const head = document.createElement('div');
+  head.className = 'mhead';
+  head.textContent = SYSTEM.hostname || 'Prism';
+  sysPanel.append(head);
+
+  sysPanel.append(item('\u25a4', 'Settings', '', () => launch('settings')));
+  sysPanel.append(item('\u25ce', 'Search', '\u2318K', () => openPal()));
+
+  const sep = document.createElement('div');
+  sep.className = 'msep';
+  sysPanel.append(sep);
+
+  for (const a of ['vitals', 'files', 'terminal', 'facets', 'timeline']) {
+    if (APPS[a]) sysPanel.append(item('\u25b8', APPS[a].title, '', () => launch(a)));
+  }
+
+  const sep2 = document.createElement('div');
+  sep2.className = 'msep';
+  sysPanel.append(sep2);
+  // Ends the session on this device only; the host and its workloads are
+  // untouched, which is the distinction that matters when the machine is
+  // three hundred miles away.
+  sysPanel.append(item('\u25a0', 'Lock this device', '', () => {
+    fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' })
+      .catch(() => {})
+      .finally(() => location.reload());
+  }));
+
+  sysPanel.hidden = false;
+  sysBtn.setAttribute('aria-expanded', 'true');
+}
+
+sysBtn.addEventListener('click', e => {
+  e.stopPropagation();
+  sysPanel.hidden ? openSysMenu() : closeSysMenu();
+});
+document.addEventListener('click', e => {
+  if (!sysPanel.hidden && !sysPanel.contains(e.target)) closeSysMenu();
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && !sysPanel.hidden) closeSysMenu();
+});
+
+/* ── settings ────────────────────────────────────────────── */
+function appSettings() {
+  const d = el(`<div class="setwrap">
+      <div class="setnav"></div>
+      <div class="setpane"></div>
+    </div>`);
+  const nav = d.querySelector('.setnav');
+  const pane = d.querySelector('.setpane');
+
+  const PANES = {
+    apps: { title: 'Apps', render: paneApps },
+    about: { title: 'About', render: paneAbout }
+  };
+  let current = 'apps';
+
+  function select(key) {
+    current = key;
+    for (const b of nav.children) b.classList.toggle('on', b.dataset.k === key);
+    pane.innerHTML = '';
+    PANES[key].render(pane);
+  }
+
+  for (const [k, v] of Object.entries(PANES)) {
+    const b = document.createElement('button');
+    b.dataset.k = k;
+    b.textContent = v.title;
+    b.onclick = () => select(k);
+    nav.append(b);
+  }
+  select(current);
+  return d;
+}
+
+/* Everything serving HTTP on the host, offered rather than assumed.
+   Nothing is added without being asked for: a desktop that published whatever
+   happened to be listening would be presumptuous, and which of these is
+   actually an app is a judgement only the operator can make. */
+async function paneApps(pane) {
+  const note = document.createElement('p');
+  note.className = 'pnote';
+  note.textContent = 'Anything serving HTTP on this machine can become an app. '
+    + 'Prism proxies what you add; it does not start it unless you give it a command.';
+  pane.append(note);
+
+  const list = document.createElement('div');
+  list.innerHTML = '<div class="empty">scanning ports…</div>';
+  pane.append(list);
+
+  let found;
+  try {
+    found = await API.get('/api/discover');
+  } catch (e) {
+    list.innerHTML = '';
+    const p = document.createElement('div');
+    p.className = 'empty';
+    p.textContent = e.message || 'could not scan';
+    list.append(p);
+    return;
+  }
+
+  list.innerHTML = '';
+  if (!found.length) {
+    const p = document.createElement('div');
+    p.className = 'empty';
+    p.textContent = 'nothing else is serving HTTP right now';
+    list.append(p);
+    return;
+  }
+
+  for (const c of found) {
+    const row = document.createElement('div');
+    row.className = 'svc';
+    const label = c.title || c.process || `port ${c.port}`;
+
+    const who = document.createElement('div');
+    who.className = 'who';
+    who.innerHTML = '<div class="t"></div><div class="sub"></div>';
+    who.querySelector('.t').textContent = label;
+    who.querySelector('.sub').textContent =
+      [`:${c.port}`, c.tls ? 'https' : 'http', c.process, c.command]
+        .filter(Boolean).join('  ·  ');
+    row.append(who);
+
+    if (c.known) {
+      const tag = document.createElement('span');
+      tag.className = 'claimed';
+      tag.textContent = 'added';
+      row.append(tag);
+    } else {
+      const add = document.createElement('button');
+      add.className = 'btn';
+      add.textContent = 'Add';
+      add.onclick = async () => {
+        add.disabled = true;
+        add.textContent = 'adding…';
+        try {
+          await API.post('/api/facets', {
+            name: label, command: '', expose: c.port,
+            title: label, tls: c.tls
+          });
+          await loadProxied();
+          toast(`${label} added — it is in the dock`);
+          paneRefresh(pane);
+        } catch (e) {
+          toast(e.message || 'could not add', 'bad');
+          add.disabled = false;
+          add.textContent = 'Add';
+        }
+      };
+      row.append(add);
+    }
+    list.append(row);
+  }
+}
+
+function paneRefresh(pane) {
+  pane.innerHTML = '';
+  paneApps(pane);
+}
+
+function paneAbout(pane) {
+  const dl = document.createElement('dl');
+  dl.className = 'kv';
+  const rows = [
+    ['Host', SYSTEM.hostname || '—'],
+    ['Version', SYSTEM.version || '—'],
+    ['Serving on', SYSTEM.port ? `port ${SYSTEM.port}` : '—'],
+    ['Session', 'this device is enrolled']
+  ];
+  for (const [k, v] of rows) {
+    const dt = document.createElement('dt');
+    dt.textContent = k;
+    const dd = document.createElement('dd');
+    dd.textContent = v;
+    dl.append(dt, dd);
+  }
+  pane.append(dl);
 }
 
 /* ── dock ────────────────────────────────────────────────── */
@@ -2646,6 +2922,7 @@ async function boot() {
   // were configured at all.
   await loadRoots();
   await loadProxied();
+  await loadSystem();
 
   // Layout comes from the host, so the same desktop appears on every device.
   const restored = await restore();

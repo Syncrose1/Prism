@@ -192,7 +192,20 @@ async fn list(State(state): State<AppState>, headers: HeaderMap) -> Response {
 struct CreateRequest {
     name: String,
     /// The command line, as typed. Split with shell-like quoting.
+    ///
+    /// May be empty when `expose` is set. A service found by the discovery
+    /// sweep is already running and was started by something that is not
+    /// Prism, so there is no command to record; inventing one would be a lie
+    /// that only surfaces when somebody presses Start.
+    #[serde(default)]
     command: String,
+    /// What to call the window. Discovery supplies the page's own <title>,
+    /// which beats a name derived from a process.
+    #[serde(default)]
+    title: Option<String>,
+    /// Whether the backend speaks TLS, as determined by the sweep.
+    #[serde(default)]
+    tls: bool,
     #[serde(default)]
     cwd: Option<String>,
     #[serde(default)]
@@ -278,8 +291,12 @@ async fn create(
         return err(StatusCode::BAD_REQUEST, "no_name", "a name is required");
     }
     let command = split_command(&body.command);
-    if command.is_empty() {
-        return err(StatusCode::BAD_REQUEST, "no_command", "a command is required");
+    if command.is_empty() && body.expose.is_none() {
+        return err(
+            StatusCode::BAD_REQUEST,
+            "no_command",
+            "a command is required, unless the app is adopted by port",
+        );
     }
 
     let mut id = slug(&name);
@@ -308,8 +325,8 @@ async fn create(
         enabled_if: Default::default(),
         expose: body.expose.map(|port| prism_core::config::Expose {
             port,
-            title: None,
-            tls: false,
+            title: body.title.clone().filter(|t| !t.trim().is_empty()),
+            tls: body.tls,
             direct: false,
         }),
         pty: body.pty,
@@ -404,6 +421,15 @@ async fn start(
             }
             Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, "start_failed", e.to_string()),
         };
+    }
+
+    if facet.command.is_empty() {
+        return err(
+            StatusCode::BAD_REQUEST,
+            "no_command",
+            "this app was adopted by port — Prism proxies it but does not \
+             start it. Give it a command to make it launchable.",
+        );
     }
 
     let sup = Supervisor::new();

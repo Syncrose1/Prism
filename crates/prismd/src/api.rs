@@ -110,6 +110,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/health", get(health))
         .route("/api/auth/login", post(login))
         .route("/api/auth/prompt", get(login_prompt))
+        .route("/api/auth/logout", post(logout))
         .route("/api/vitals", get(vitals))
         .merge(crate::discover::routes())
         .route("/api/events", get(events))
@@ -253,6 +254,33 @@ struct PromptResponse {
     /// otherwise "code".
     prompt: &'static str,
     has_password: bool,
+}
+
+/// End the session on this device, keeping the device enrolment.
+///
+/// The two tokens exist precisely so this can be cheap. Clearing the session
+/// means the next visit asks for the password; clearing the enrolment would
+/// mean finding an authenticator, which is the friction the operator asked to
+/// be rid of. So only the session cookie is dropped.
+///
+/// Nothing on the host is touched: workloads, terminals and their windows keep
+/// running. Locking the screen you are looking at should not interrupt work on
+/// a machine you are not.
+///
+/// Unauthenticated deliberately — refusing to log out someone whose session
+/// has already expired would only strand them on a page they cannot leave.
+async fn logout() -> Response {
+    (
+        StatusCode::OK,
+        [(
+            axum::http::header::SET_COOKIE,
+            // Max-Age=0 with a matching path is what actually removes it;
+            // an expiry in the past on a different path leaves it in place.
+            "prism_session=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax",
+        )],
+        Json(serde_json::json!({ "ok": true })),
+    )
+        .into_response()
 }
 
 /// What the login screen should ask for. Public: it reveals only whether *this*

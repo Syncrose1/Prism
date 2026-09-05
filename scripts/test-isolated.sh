@@ -65,5 +65,10 @@ else
     echo "note: node not found, skipping shell syntax check" >&2
 fi
 
+# A browser is the only thing that catches load-order faults: a block that runs
+# at load while referencing a `const` declared below it parses cleanly and
+# throws, leaving a page that renders and does nothing.
+python3 "$(dirname "$0")/check-shell-loads.py" || exit 1
+
 echo "running tests in an isolated PID namespace"
 exec unshare --user --pid --fork --mount-proc cargo test "$@"

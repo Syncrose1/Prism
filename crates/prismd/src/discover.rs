@@ -374,8 +374,47 @@ pub async fn sweep(state: &AppState, own_port: u16) -> Vec<Candidate> {
         .collect()
 }
 
+/// Facts about the host that do not change while it runs.
+///
+/// The shell used to carry the machine's name as literal text, which was wrong
+/// on every machine but the one it was written on — and a hostname is exactly
+/// the sort of thing that should not be baked into a published repository.
+#[derive(Debug, Clone, Serialize)]
+pub struct SystemInfo {
+    pub hostname: String,
+    pub profile: String,
+    pub version: &'static str,
+    pub port: u16,
+}
+
 pub fn routes() -> Router<AppState> {
-    Router::new().route("/api/discover", get(list))
+    Router::new()
+        .route("/api/discover", get(list))
+        .route("/api/system", get(system))
+}
+
+async fn system(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    use axum::response::IntoResponse;
+    if let Some(denied) =
+        crate::api::require(&state, &headers, prism_core::auth::Sensitivity::Session)
+    {
+        return denied;
+    }
+    let hostname = std::fs::read_to_string("/proc/sys/kernel/hostname")
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|_| "unknown".into());
+    let profile = state
+        .profile_path
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "profile".into());
+    Json(SystemInfo {
+        hostname,
+        profile,
+        version: env!("CARGO_PKG_VERSION"),
+        port: state.port,
+    })
+    .into_response()
 }
 
 async fn list(State(state): State<AppState>, headers: HeaderMap) -> Response {
