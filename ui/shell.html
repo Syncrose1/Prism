@@ -727,6 +727,7 @@ function appVitals() {
 }
 
 let ROOTS = [];
+const lastBrowsed = { root: '', path: '' };
 async function loadRoots() {
   try { ROOTS = await API.get('/api/files/roots'); } catch { ROOTS = []; }
 }
@@ -820,6 +821,9 @@ function appFiles(startRoot, startPath = '') {
       }
       list.append(row);
     }
+
+    lastBrowsed.root = root;
+    lastBrowsed.path = data.path;
 
     const win = d.closest('.win');
     if (win) {
@@ -964,7 +968,16 @@ function appGallery(root, dirPath, startName) {
     stage.querySelectorAll('img,video,.miss').forEach(x => x.remove());
     const node = document.createElement(e.kind === 'video' ? 'video' : 'img');
     node.src = rawUrl(e);
-    if (e.kind === 'video') { node.controls = true; node.autoplay = false; }
+    if (e.kind === 'video') { node.controls = true; node.autoplay = false; node.preload = 'metadata'; }
+    node.onerror = () => {
+      node.remove();
+      const m = document.createElement('span');
+      m.className = 'miss';
+      m.textContent = e.kind === 'video'
+        ? 'this browser cannot decode this video'
+        : 'could not load';
+      stage.prepend(m);
+    };
     stage.prepend(node);
 
     nameEl.textContent = e.name;
@@ -997,7 +1010,9 @@ function appGallery(root, dirPath, startName) {
       .map(e => ({ ...e, path: data.path ? `${data.path}/${e.name}` : e.name }));
 
     if (!items.length) {
-      stage.innerHTML = '<span class="miss">nothing viewable here</span>';
+      stage.innerHTML = '<span class="miss">no images or video in this folder</span>';
+      const win = d.closest('.win');
+      if (win) win.querySelector('.meta').textContent = data.path || root;
       return;
     }
 
@@ -1051,7 +1066,10 @@ function appGallery(root, dirPath, startName) {
    running. Only Kill destroys, via cgroup.kill. See ADR 0003. */
 function appTerminal(existingId) {
   const d = el('<div class="xt" style="position:absolute;inset:0;padding:8px 4px 4px 8px"></div>');
-  const host = d;
+  // el() wraps: `d` is the wrapper, the styled .xt element is its child.
+  // Opening xterm into the unstyled wrapper left it with no size, so it never
+  // took focus and nothing could be typed.
+  const host = d.firstElementChild;
 
   const term = new Terminal({
     fontFamily: 'ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace',
@@ -1101,6 +1119,7 @@ function appTerminal(existingId) {
     ws.binaryType = 'arraybuffer';
 
     ws.onmessage = e => term.write(new Uint8Array(e.data));
+    ws.onopen = () => { try { term.focus(); } catch {} };
     ws.onclose = () => {
       if (win) win.querySelector('.meta').innerHTML = '<span class="termbadge det">detached</span>';
     };
@@ -1112,6 +1131,8 @@ function appTerminal(existingId) {
       if (sid) API.post(`/api/term/${sid}/resize`, { rows, cols }).catch(() => {});
     });
   }
+
+  d.addEventListener('pointerdown', () => { try { term.focus(); } catch {} });
 
   // Refit when the window is resized or restored.
   const ro = new ResizeObserver(() => { try { fit.fit(); } catch {} });
@@ -1132,8 +1153,9 @@ const APPS = {
   facets:   { title: 'Facets',   w: 392, h: 286, make: appFacets },
   media:    { title: 'Media',    w: 400, h: 360, make: appMedia },
   timeline: { title: 'Timeline', w: 420, h: 240, make: appTimeline },
-  gallery:  { title: 'Gallery',  w: 640, h: 520, make: () => appGallery(
-                (ROOTS[0] && ROOTS[0].name) || '', '', null), multi: true },
+  gallery:  { title: 'Gallery',  w: 640, h: 520, multi: true,
+              make: () => appGallery(lastBrowsed.root || (ROOTS[0] && ROOTS[0].name) || '',
+                                     lastBrowsed.path, null) },
   terminal: { title: 'Terminal', w: 560, h: 340, make: appTerminal, multi: true }
 };
 

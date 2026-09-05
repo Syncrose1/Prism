@@ -21,6 +21,7 @@ use prism_core::auth::Sensitivity;
 use prism_core::files::{list, path as fpath};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use tokio::io::AsyncReadExt as _;
 use tracing::warn;
 
 use crate::api::{AppState, require};
@@ -168,10 +169,16 @@ struct FileQuery {
     download: Option<bool>,
 }
 
-/// Serve a file's bytes.
+/// Serve a file's bytes, streamed, with HTTP range support.
 ///
-/// `Content-Disposition: attachment` only when explicitly requested, so images
-/// and video can render inline while a click on "download" still saves.
+/// Streaming rather than reading into memory is not an optimisation here: a
+/// model file on this host is routinely 20 GB, and buffering one to serve it
+/// would be a memory incident caused by the daemon built to prevent memory
+/// incidents.
+///
+/// Range support is what makes video play at all. A browser will not seek —
+/// and often refuses to start — without `Accept-Ranges: bytes` and a 206 for
+/// partial requests. A 215 MB recording failed to load for exactly this reason.
 async fn raw(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -184,9 +191,15 @@ async fn raw(
         Ok(v) => v,
         Err(r) => return r,
     };
-    if full.is_dir() {
+
+    let meta = match tokio::fs::metadata(&full).await {
+        Ok(m) => m,
+        Err(e) => return err(StatusCode::NOT_FOUND, "read_failed", e.to_string()),
+    };
+    if meta.is_dir() {
         return err(StatusCode::BAD_REQUEST, "is_a_directory", "is a directory");
     }
+    let len = meta.len();
 
     let name = full
         .file_name()
@@ -194,25 +207,84 @@ async fn raw(
         .unwrap_or_else(|| "file".into());
     let mime = mime_for(&name);
 
-    match tokio::fs::read(&full).await {
-        Ok(bytes) => {
-            let mut resp = Response::builder()
-                .header(header::CONTENT_TYPE, mime)
-                // Private: this is the operator's filesystem over a shared
-                // proxy-free path, but caching it in an intermediary is still
-                // not something to invite.
-                .header(header::CACHE_CONTROL, "private, max-age=60");
-            if q.download.unwrap_or(false) {
-                resp = resp.header(
-                    header::CONTENT_DISPOSITION,
-                    format!("attachment; filename=\"{}\"", name.replace('"', "")),
-                );
-            }
-            resp.body(Body::from(bytes))
-                .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+    let mut file = match tokio::fs::File::open(&full).await {
+        Ok(f) => f,
+        Err(e) => return err(StatusCode::NOT_FOUND, "read_failed", e.to_string()),
+    };
+
+    // A byte range, if the client asked for one. Only the single-range form is
+    // supported; multipart ranges are vanishingly rare and not worth the
+    // complexity of a multipart body.
+    let range = headers
+        .get(header::RANGE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| parse_range(v, len));
+
+    let (status, start, count) = match range {
+        Some((s, e)) => (StatusCode::PARTIAL_CONTENT, s, e - s + 1),
+        None => (StatusCode::OK, 0, len),
+    };
+
+    if start > 0 {
+        use tokio::io::AsyncSeekExt;
+        if file.seek(std::io::SeekFrom::Start(start)).await.is_err() {
+            return err(StatusCode::INTERNAL_SERVER_ERROR, "seek_failed", "cannot seek");
         }
-        Err(e) => err(StatusCode::NOT_FOUND, "read_failed", e.to_string()),
     }
+
+    let stream = tokio_util::io::ReaderStream::new(file.take(count));
+    let mut resp = Response::builder()
+        .status(status)
+        .header(header::CONTENT_TYPE, mime)
+        .header(header::ACCEPT_RANGES, "bytes")
+        .header(header::CONTENT_LENGTH, count)
+        .header(header::CACHE_CONTROL, "private, max-age=60");
+
+    if status == StatusCode::PARTIAL_CONTENT {
+        resp = resp.header(
+            header::CONTENT_RANGE,
+            format!("bytes {}-{}/{}", start, start + count - 1, len),
+        );
+    }
+    if q.download.unwrap_or(false) {
+        resp = resp.header(
+            header::CONTENT_DISPOSITION,
+            format!("attachment; filename=\"{}\"", name.replace('"', "")),
+        );
+    }
+
+    resp.body(Body::from_stream(stream))
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
+/// Parse a single `bytes=` range against a known length.
+///
+/// Returns an inclusive `(start, end)`. Unsatisfiable or malformed ranges yield
+/// `None`, which the caller treats as "send the whole file" — more forgiving
+/// than a 416, and a browser that sent a bad range still gets playable bytes.
+fn parse_range(header: &str, len: u64) -> Option<(u64, u64)> {
+    let spec = header.strip_prefix("bytes=")?.trim();
+    if spec.contains(',') {
+        return None; // multipart ranges unsupported
+    }
+    let (a, b) = spec.split_once('-')?;
+    let (start, end) = match (a.trim(), b.trim()) {
+        // bytes=-500 — the final 500 bytes.
+        ("", suffix) => {
+            let n: u64 = suffix.parse().ok()?;
+            if n == 0 || len == 0 {
+                return None;
+            }
+            (len.saturating_sub(n), len - 1)
+        }
+        // bytes=500- — from 500 to the end.
+        (s, "") => (s.parse().ok()?, len.checked_sub(1)?),
+        (s, e) => (s.parse().ok()?, e.parse::<u64>().ok()?.min(len.saturating_sub(1))),
+    };
+    if start > end || start >= len {
+        return None;
+    }
+    Some((start, end))
 }
 
 /// Generate (or serve a cached) thumbnail.
@@ -391,6 +463,42 @@ mod tests {
     #[test]
     fn extension_matching_is_case_insensitive() {
         assert_eq!(mime_for("PHOTO.JPG"), "image/jpeg");
+    }
+
+    #[test]
+    fn parses_a_normal_range() {
+        assert_eq!(parse_range("bytes=0-499", 1000), Some((0, 499)));
+        assert_eq!(parse_range("bytes=500-999", 1000), Some((500, 999)));
+    }
+
+    #[test]
+    fn open_ended_range_runs_to_the_end() {
+        assert_eq!(parse_range("bytes=500-", 1000), Some((500, 999)));
+    }
+
+    #[test]
+    fn suffix_range_takes_the_tail() {
+        assert_eq!(parse_range("bytes=-500", 1000), Some((500, 999)));
+        assert_eq!(parse_range("bytes=-5000", 1000), Some((0, 999)));
+    }
+
+    #[test]
+    fn an_end_past_the_file_is_clamped() {
+        // Browsers routinely ask for more than exists at the tail of a video.
+        assert_eq!(parse_range("bytes=900-9999", 1000), Some((900, 999)));
+    }
+
+    #[test]
+    fn unsatisfiable_and_malformed_ranges_fall_back_to_the_whole_file() {
+        for bad in ["bytes=2000-3000", "bytes=500-100", "nonsense", "bytes=", "bytes=abc-def", "bytes=0-1,5-6"] {
+            assert_eq!(parse_range(bad, 1000), None, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn range_on_an_empty_file_is_none() {
+        assert_eq!(parse_range("bytes=0-", 0), None);
+        assert_eq!(parse_range("bytes=-10", 0), None);
     }
 
     #[tokio::test]
