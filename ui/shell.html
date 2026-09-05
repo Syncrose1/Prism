@@ -386,6 +386,11 @@ body {
   background: rgba(3,4,6,.55); backdrop-filter: blur(9px);
   animation: fade .13s ease backwards;
 }
+/* The `hidden` attribute is a UA rule of specificity (0,1,0), so the id
+   selector above outranks it and the attribute becomes decorative — the panel
+   stays on screen and nothing that sets `hidden` appears to work. Restating it
+   at (1,1,0) is what actually hides it. */
+#launcher[hidden] { display: none; }
 .lch {
   width: min(880px, 92vw); height: min(560px, 84vh);
   display: flex; flex-direction: column;

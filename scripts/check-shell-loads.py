@@ -164,6 +164,26 @@ def main():
             command("Runtime.evaluate", {"expression": "1", "returnByValue": True})
             time.sleep(0.4)
 
+        # An element carrying `hidden` that is still displayed. A UA rule
+        # hides it at specificity (0,1,0), which any id selector setting
+        # `display` outranks — so the attribute silently stops working and
+        # every close button that sets it appears dead. Cheap to check, and it
+        # is invisible to both syntax checking and exception reporting.
+        stuck = command("Runtime.evaluate", {
+            "expression": (
+                "JSON.stringify([...document.querySelectorAll('[hidden]')]"
+                ".filter(e=>getComputedStyle(e).display!=='none')"
+                ".map(e=>e.id||e.className||e.tagName))"
+            ),
+            "returnByValue": True,
+        })["result"]["result"].get("value")
+        if stuck and stuck != "[]":
+            print(f"ui/shell.html: [hidden] elements are still displayed: {stuck}",
+                  file=sys.stderr)
+            print("  a `display` rule outranks the UA [hidden] rule; "
+                  "restate it as `#id[hidden] { display: none }`", file=sys.stderr)
+            return 1
+
         # Anything that failed to *fetch* is expected: there is no daemon here.
         real = [e for e in errors if "Failed to fetch" not in e and "NetworkError" not in e]
         if real:
