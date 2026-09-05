@@ -15,6 +15,7 @@ mod api;
 mod bind;
 mod monitor;
 mod enrol;
+mod facets_api;
 mod files_api;
 mod rescue;
 mod term_api;

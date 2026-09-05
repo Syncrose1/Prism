@@ -102,6 +102,7 @@ pub fn router(state: AppState) -> Router {
         .merge(crate::rescue::routes())
         .merge(crate::term_api::routes())
         .merge(crate::files_api::routes())
+        .merge(crate::facets_api::routes())
         .route("/", get(crate::ui::index))
         .route("/ui/{*path}", get(crate::ui::asset))
         .with_state(state)

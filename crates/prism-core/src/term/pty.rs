@@ -35,6 +35,30 @@ impl Default for WinSize {
     }
 }
 
+/// Environment the child is given, over and above what the daemon inherited.
+///
+/// `TERM` is the important one. The daemon inherits whatever launched it — on
+/// this host, `xterm-kitty` — and a child that believes it is talking to kitty
+/// emits kitty-specific escape sequences that xterm.js cannot render. The
+/// symptom is a terminal that has gone monochrome with broken glyphs, which is
+/// exactly what the operator saw.
+///
+/// The far end is xterm.js, so the PTY must describe itself accurately:
+/// `xterm-256color` is what xterm.js actually implements. `TERMINFO` is cleared
+/// for the same reason — a kitty terminfo directory would override the honest
+/// answer.
+fn child_env() -> Vec<(String, String)> {
+    vec![
+        ("TERM".into(), "xterm-256color".into()),
+        // xterm.js does render 24-bit colour, so advertising it is not a lie.
+        ("COLORTERM".into(), "truecolor".into()),
+        ("TERM_PROGRAM".into(), "Prism".into()),
+        // Empty clears it: see above.
+        ("TERMINFO".into(), String::new()),
+        ("TERMINFO_DIRS".into(), String::new()),
+    ]
+}
+
 impl Pty {
     /// Fork a child attached to a new pseudo-terminal.
     ///
@@ -65,6 +89,30 @@ impl Pty {
             ),
             None => None,
         };
+
+        // The child's environment is assembled here, in the parent, because
+        // nothing may allocate after the fork. Overrides replace inherited
+        // values; an empty override drops the variable entirely.
+        let overrides = child_env();
+        let mut env: Vec<CString> = Vec::new();
+        for (key, value) in std::env::vars() {
+            if overrides.iter().any(|(k, _)| *k == key) {
+                continue;
+            }
+            if let Ok(c) = CString::new(format!("{key}={value}")) {
+                env.push(c);
+            }
+        }
+        for (key, value) in &overrides {
+            if value.is_empty() {
+                continue; // cleared, not set to empty
+            }
+            if let Ok(c) = CString::new(format!("{key}={value}")) {
+                env.push(c);
+            }
+        }
+        let mut env_ptrs: Vec<*const libc::c_char> = env.iter().map(|e| e.as_ptr()).collect();
+        env_ptrs.push(std::ptr::null());
 
         let winsize = libc::winsize {
             ws_row: size.rows,
@@ -100,7 +148,7 @@ impl Pty {
                     // directory beats refusing to give the operator a shell.
                     libc::chdir(dir.as_ptr());
                 }
-                libc::execvp(program.as_ptr(), argv_ptrs.as_ptr());
+                libc::execvpe(program.as_ptr(), argv_ptrs.as_ptr(), env_ptrs.as_ptr());
                 // Only reached if exec failed. 127 is the shell convention for
                 // "command not found".
                 libc::_exit(127);
@@ -342,6 +390,45 @@ mod tests {
         pty.resize(WinSize { rows: 50, cols: 200 }).expect("resize");
         pty.write(b"\n").expect("nudge");
         assert!(read_until(&pty, "50 200", 5).contains("50 200"));
+    }
+
+    #[test]
+    fn the_child_is_told_it_is_an_xterm_not_whatever_launched_the_daemon() {
+        // Inheriting TERM=xterm-kitty made programs emit sequences xterm.js
+        // cannot render: monochrome output and broken glyphs.
+        let pty = Pty::spawn(
+            &["sh".into(), "-c".into(), "echo TERM=$TERM COLORTERM=$COLORTERM".into()],
+            None,
+            WinSize::default(),
+        )
+        .expect("spawn");
+        let out = read_until(&pty, "TERM=", 5);
+        assert!(out.contains("TERM=xterm-256color"), "got: {out:?}");
+        assert!(out.contains("COLORTERM=truecolor"), "got: {out:?}");
+    }
+
+    #[test]
+    fn a_stale_terminfo_directory_is_not_passed_through() {
+        let pty = Pty::spawn(
+            &["sh".into(), "-c".into(), "echo TI=[${TERMINFO:-unset}]".into()],
+            None,
+            WinSize::default(),
+        )
+        .expect("spawn");
+        assert!(read_until(&pty, "TI=", 5).contains("TI=[unset]"));
+    }
+
+    #[test]
+    fn the_rest_of_the_environment_still_reaches_the_child() {
+        // Overriding TERM must not mean handing the child an empty environment.
+        let pty = Pty::spawn(
+            &["sh".into(), "-c".into(), "echo HOME=[${HOME:-unset}]".into()],
+            None,
+            WinSize::default(),
+        )
+        .expect("spawn");
+        let out = read_until(&pty, "HOME=", 5);
+        assert!(!out.contains("HOME=[unset]"), "got: {out:?}");
     }
 
     #[test]

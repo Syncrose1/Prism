@@ -1,5 +1,17 @@
 <title>Prism OS</title>
 <link rel="stylesheet" href="/ui/vendor/xterm.css">
+<style>
+/* Subset of CaskaydiaCove Nerd Font Mono — Latin, box drawing, Powerline and
+   the Nerd Font private-use blocks. Vendored so prompt and fastfetch glyphs
+   render on a phone or laptop that has no such font installed, not only on the
+   host itself. 789 KB, cached immutably. */
+@font-face {
+  font-family: "PrismTerm";
+  src: url("/ui/vendor/term-nerd.woff2") format("woff2");
+  font-weight: 100 900;
+  font-display: swap;
+}
+</style>
 <script src="/ui/vendor/xterm.js"></script>
 <script src="/ui/vendor/xterm-addon-fit.js"></script>
 
@@ -350,6 +362,16 @@ body {
 .dot { width: 5px; height: 5px; border-radius: 50%; flex: 0 0 5px; }
 .dot.up { background: var(--green); box-shadow: 0 0 7px var(--green); }
 .dot.down { background: var(--ink-ghost); }
+.dot.bad { background: var(--red); box-shadow: 0 0 7px var(--red); }
+.note-line { color: var(--ink-ghost); font-size: 10.5px; margin: 6px 0 0; line-height: 1.5; }
+.cmdline { font-size: 10px; overflow-wrap: anywhere; color: var(--ink-faint); }
+.limits label { display: block; font-size: 10.5px; color: var(--ink-faint); margin: 10px 0 0; }
+.limits input {
+  display: block; width: 100%; margin-top: 3px; padding: 5px 7px; font: inherit; font-size: 12px;
+  background: var(--base); border: 1px solid var(--line-hi); border-radius: 2px; color: var(--ink);
+  outline: none;
+}
+.limits input:focus { border-color: var(--ink-faint); }
 .facet .st { margin-left: auto; font-size: 10px; letter-spacing: .15em; text-transform: uppercase; color: var(--ink-ghost); }
 .bars { display: grid; gap: 5px; }
 .bar { display: flex; align-items: center; gap: 8px; }
@@ -894,21 +916,141 @@ function openPreview(root, path, entry) {
 }
 
 function appFacets() {
-  return el(`
-    <div class="facet">
-      <div class="top"><span class="dot up"></span><span class="nm">ComfyUI</span><span class="st">Running</span></div>
-      <div class="bars">
-        <div class="bar"><span class="bl">RAM</span><span class="meter"><i class="hot" style="width:47%"></i></span><span class="bv">14.3 GiB</span></div>
-        <div class="bar"><span class="bl">Swap</span><span class="meter"><i style="width:11%"></i></span><span class="bv">0.7 / 6 GiB</span></div>
-        <div class="bar"><span class="bl">VRAM</span><span class="meter"><i style="width:16%"></i></span><span class="bv">1.9 GiB</span></div>
-      </div>
-      <div class="acts"><button class="btn">Limits</button><button class="btn">Logs</button><button class="btn danger">Stop</button></div>
-    </div>
-    <div class="facet">
-      <div class="top"><span class="dot down"></span><span class="nm">llama.cpp</span><span class="st">Stopped</span></div>
-      <div class="bars"><div class="bar"><span class="bl">RAM</span><span class="meter"><i style="width:0%"></i></span><span class="bv">—</span></div></div>
-      <div class="acts"><button class="btn">Start</button><button class="btn">Limits</button></div>
+  const d = el('<div class="facets"></div>');
+  const list = d.querySelector('.facets');
+  let timer = null;
+
+  const fmt = m => m === null || m === undefined ? '—' : (m / 1024).toFixed(1) + ' GiB';
+
+  async function act(id, what, body) {
+    try {
+      await API.post(`/api/facets/${encodeURIComponent(id)}/${what}`, body);
+    } catch (e) {
+      // Refusals here are meaningful — degraded machine, unmet gate, already
+      // running — so they are shown rather than swallowed.
+      alert(e.message || ('could not ' + what));
+    }
+    render();
+  }
+
+  async function render() {
+    let facets;
+    try {
+      facets = await API.get('/api/facets');
+    } catch { return; }
+
+    if (!facets.length) {
+      list.innerHTML = '<div class="empty">no facets configured</div>';
+      return;
+    }
+
+    list.innerHTML = '';
+    for (const f of facets) {
+      const card = document.createElement('div');
+      card.className = 'facet';
+      const running = f.state === 'running';
+
+      const top = document.createElement('div');
+      top.className = 'top';
+      top.innerHTML = `<span class="dot ${running ? 'up' : f.state === 'failed' ? 'bad' : 'down'}"></span>
+        <span class="nm"></span><span class="st">${f.state}</span>`;
+      top.querySelector('.nm').textContent = f.name;
+      card.append(top);
+
+      if (!f.available) {
+        const w = document.createElement('div');
+        w.className = 'note-line';
+        w.textContent = 'unavailable: ' + (f.unavailable_because || 'gate not met');
+        card.append(w);
+      }
+
+      const bars = document.createElement('div');
+      bars.className = 'bars';
+      const bar = (label, used, limit) => {
+        const row = document.createElement('div');
+        row.className = 'bar';
+        const pct = (used != null && limit) ? Math.min(100, used / limit * 100) : 0;
+        row.innerHTML = `<span class="bl">${label}</span>
+          <span class="meter"><i class="${pct > 80 ? 'hot' : ''}" style="width:${pct}%"></i></span>
+          <span class="bv">${fmt(used)}</span>`;
+        return row;
+      };
+      const gib = v => v ? parseFloat(v) * (/g/i.test(v) ? 1024 : 1) : null;
+      bars.append(bar('RAM', f.memory_mib, gib(f.limits.memory_max) || gib(f.limits.memory_high)));
+      bars.append(bar('Swap', f.swap_mib, gib(f.limits.swap_max)));
+      card.append(bars);
+
+      const cmd = document.createElement('div');
+      cmd.className = 'note-line cmdline';
+      cmd.textContent = f.command;
+      card.append(cmd);
+
+      const acts = document.createElement('div');
+      acts.className = 'acts';
+      const btn = (label, cls, fn) => {
+        const b = document.createElement('button');
+        b.className = 'btn' + (cls ? ' ' + cls : '');
+        b.textContent = label;
+        b.onclick = fn;
+        return b;
+      };
+      if (running) {
+        acts.append(btn('Stop', '', () => act(f.id, 'stop')));
+        acts.append(btn('Kill', 'danger', () => act(f.id, 'kill')));
+      } else {
+        const start = btn('Start', '', () => act(f.id, 'start'));
+        start.disabled = !f.available;
+        if (!f.available) start.style.opacity = '.4';
+        acts.append(start);
+      }
+      acts.append(btn('Limits', '', () => editLimits(f, () => render())));
+      card.append(acts);
+
+      list.append(card);
+    }
+  }
+
+  render();
+  // Poll while the window is open; memory figures are only live for running
+  // facets and the operator expects them to move.
+  timer = setInterval(() => d.isConnected ? render() : clearInterval(timer), 3000);
+  d.__onClose = () => clearInterval(timer);
+  return d;
+}
+
+/* Live limit adjustment — the "drag a slider from London" requirement. Applied
+   to the running cgroup, so a misbehaving workload can be throttled instead of
+   killed and relaunched. */
+function editLimits(f, done) {
+  const content = el(`<div class="limits">
+      <p class="note-line">Applied to the running workload immediately. Blank means unlimited.</p>
+      <label>Memory high <input name="memory_high" placeholder="e.g. 22G"></label>
+      <label>Memory max  <input name="memory_max"  placeholder="e.g. 26G"></label>
+      <label>Swap max    <input name="swap_max"    placeholder="e.g. 6G"></label>
+      <p class="note-line">Swap is the one that matters: the failure this guards
+        against is a swap runaway, so capping it contains the spiral without
+        constraining RAM.</p>
+      <div class="acts"><button class="btn apply">Apply</button></div>
     </div>`);
+  for (const k of ['memory_high', 'memory_max', 'swap_max']) {
+    content.querySelector(`[name=${k}]`).value = f.limits[k] || '';
+  }
+  const win = makeWindow({ app: 'limits', title: 'Limits', meta: f.name, w: 340, h: 300, content });
+  content.querySelector('.apply').onclick = async () => {
+    const body = {};
+    for (const k of ['memory_high', 'memory_max', 'swap_max']) {
+      const v = content.querySelector(`[name=${k}]`).value.trim();
+      body[k] = v || null;
+    }
+    try {
+      await API.post(`/api/facets/${encodeURIComponent(f.id)}/limits`, body);
+      close(win);
+      done && done();
+    } catch (e) {
+      alert(e.message || 'could not apply limits');
+    }
+  };
+  return win;
 }
 
 function appMedia() {
@@ -1072,11 +1214,13 @@ function appTerminal(existingId) {
   const host = d.firstElementChild;
 
   const term = new Terminal({
-    fontFamily: 'ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace',
+    fontFamily: '"PrismTerm", "CaskaydiaCove Nerd Font Mono", "JetBrainsMono Nerd Font", ui-monospace, Menlo, monospace',
     fontSize: 12.5,
     lineHeight: 1.2,
     cursorBlink: true,
     scrollback: 5000,
+    allowProposedApi: true,
+    drawBoldTextInBrightColors: false,
     theme: {
       background: '#06070a', foreground: '#cfd6df', cursor: '#e8ebf0',
       selectionBackground: 'rgba(255,255,255,.16)',
@@ -1093,6 +1237,11 @@ function appTerminal(existingId) {
   let ws = null, sid = existingId || null;
 
   async function start() {
+    // xterm measures cell size once at open. Opening before the webfont has
+    // loaded bakes in the fallback metrics and every glyph is then misaligned.
+    if (document.fonts && document.fonts.load) {
+      try { await document.fonts.load('13px PrismTerm'); } catch {}
+    }
     term.open(host);
     // The element has no size until it is in the document.
     requestAnimationFrame(() => { try { fit.fit(); } catch {} });
