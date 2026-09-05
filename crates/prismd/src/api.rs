@@ -198,6 +198,11 @@ struct Health {
     ok: bool,
     service: &'static str,
     version: &'static str,
+    /// What this host can actually do. Reported rather than assumed so a
+    /// degraded environment — a container without cgroup delegation, a kernel
+    /// without PSI — is visible instead of silently pretending to contain
+    /// workloads it cannot.
+    platform: prism_core::platform::Capabilities,
 }
 
 /// Public by design: a liveness probe that required auth would be useless for
@@ -207,6 +212,7 @@ async fn health() -> Json<Health> {
         ok: true,
         service: "prismd",
         version: env!("CARGO_PKG_VERSION"),
+        platform: prism_core::platform::capabilities(),
     })
 }
 

@@ -87,6 +87,23 @@ fn main() -> anyhow::Result<()> {
         "prism starting"
     );
 
+    let caps = prism_core::platform::capabilities();
+    if !caps.cgroups {
+        warn!(
+            "cgroup v2 controllers are not delegated to this user: facets and \
+             terminals will run without containment, limits or attribution"
+        );
+    }
+    if !caps.psi {
+        warn!(
+            "no /proc/pressure/memory: the governor will fall back to headroom \
+             alone, which is a level rather than a measure of harm"
+        );
+    }
+    if !caps.compressed_swap_accounting {
+        info!("no zram detected; honest headroom equals available memory here");
+    }
+
     lock_memory();
 
     let secret = enrol::load_or_enrol(&state_dir)?;
