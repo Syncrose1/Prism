@@ -18,6 +18,7 @@ mod enrol;
 mod facets_api;
 mod files_api;
 mod rescue;
+mod setup;
 mod term_api;
 mod ui;
 mod workspace;
@@ -36,6 +37,9 @@ fn main() -> anyhow::Result<()> {
             let reset = args.iter().any(|a| a == "--reset");
             return enrol::command(&config::state_dir(), reset);
         }
+        Some("setup") => {
+            return setup::command(&config::config_dir());
+        }
         Some("passwd") | Some("password") => {
             return enrol::passwd(&config::state_dir());
         }
@@ -45,6 +49,7 @@ fn main() -> anyhow::Result<()> {
             println!("  prismd enrol           show enrolment status");
             println!("  prismd enrol --reset   revoke and replace the authenticator secret");
             println!("  prismd passwd          set the quick-unlock password");
+            println!("  prismd setup           detect this machine and write config");
             return Ok(());
         }
         Some(other) => anyhow::bail!("unknown command `{other}`; try --help"),
@@ -61,6 +66,15 @@ fn main() -> anyhow::Result<()> {
 
     let dir = config::config_dir();
     let state_dir = config::state_dir();
+
+    // First run: write a configuration that reflects this machine, rather than
+    // starting with no file roots and no workloads and leaving the operator to
+    // discover why everything is empty. Never overwrites.
+    match setup::write_if_absent(&dir) {
+        Ok(true) => info!(config = %dir.display(), "first run: wrote a detected configuration"),
+        Ok(false) => {}
+        Err(e) => warn!(error = %e, "could not write initial configuration"),
+    }
     let host: HostConfig =
         config::load_or_default(&dir.join("prism.toml")).context("loading host config")?;
     let profile: Profile =

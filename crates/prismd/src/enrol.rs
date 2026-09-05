@@ -154,8 +154,7 @@ pub fn command(state_dir: &Path, reset: bool) -> anyhow::Result<()> {
     banner(&secret, &uri, &path, reset && exists);
 
     if exists {
-        println!("Restart prismd for the change to take effect.");
-        println!();
+        apply_restart();
     }
     Ok(())
 }
@@ -187,9 +186,44 @@ pub fn passwd(state_dir: &Path) -> anyhow::Result<()> {
     println!("Password set. Enrolled devices can now sign in with it.");
     println!("A device still needs one authenticator code the first time.");
     println!();
-    println!("Restart prismd for the change to take effect.");
-    println!();
+    apply_restart();
     Ok(())
+}
+
+/// Restart the daemon so a credential change takes effect.
+///
+/// Telling the operator to "restart prismd" without saying how is not an
+/// instruction, it is a riddle. If the service is running, just do it; if it is
+/// not, print the exact command rather than a description of one.
+fn apply_restart() {
+    let running = std::process::Command::new("systemctl")
+        .args(["--user", "is-active", "--quiet", "prismd.service"])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+
+    if !running {
+        println!("Start Prism to use it:");
+        println!("  systemctl --user start prismd");
+        println!();
+        return;
+    }
+
+    print!("Restarting prismd… ");
+    let _ = std::io::Write::flush(&mut std::io::stdout());
+    let ok = std::process::Command::new("systemctl")
+        .args(["--user", "restart", "prismd.service"])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+
+    if ok {
+        println!("done.");
+    } else {
+        println!("failed. Run it yourself:");
+        println!("  systemctl --user restart prismd");
+    }
+    println!();
 }
 
 /// Prompt without echoing, restoring the terminal afterwards.

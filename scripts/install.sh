@@ -1,90 +1,154 @@
 #!/usr/bin/env bash
-# Install Prism for the current user.
+# Install and set up Prism for the current user, in one command.
 #
-# Everything lives in the user's own directories and runs as a systemd *user*
-# service: no root, no system unit, and nothing that needs a password. The
-# memory controller is delegated to the user slice on a modern systemd, so
-# facets and terminals still get real cgroup containment.
+#   ./scripts/install.sh
 #
-# Re-running is safe; it rebuilds, replaces the binary and restarts.
+# Builds, installs, detects what this machine has, enrols an authenticator,
+# sets a password, and starts the service. Re-running is safe: it rebuilds and
+# restarts, and never overwrites configuration or credentials.
+#
+# Everything runs as a systemd *user* service. No root is required for Prism
+# itself — the memory controller is delegated to the user slice, so facets and
+# terminals still get real cgroup containment. One optional step at the end
+# needs root once; it is offered, not assumed.
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 BIN_DIR="${PRISM_BIN_DIR:-$HOME/.local/bin}"
 UNIT_DIR="$HOME/.config/systemd/user"
+CONFIG_DIR="${PRISM_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/prism}"
+STATE_DIR="${PRISM_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/prism}"
 
-say() { printf '\n\033[1m%s\033[0m\n' "$1"; }
+step()  { printf '\n\033[1m%s\033[0m\n' "$*"; }
+note()  { printf '  %s\n' "$*"; }
+ok()    { printf '  \033[32m%s\033[0m\n' "$*"; }
+warn()  { printf '  \033[33m%s\033[0m\n' "$*"; }
 
-say "Building (release)"
-cargo build --release
+# ── requirements ──────────────────────────────────────────────────────────
+step "Checking requirements"
+missing=0
+if ! command -v cargo >/dev/null; then
+    warn "cargo not found — install Rust from https://rustup.rs"
+    missing=1
+fi
+if ! systemctl --user show-environment >/dev/null 2>&1; then
+    warn "no systemd user manager — Prism needs one for service management"
+    missing=1
+fi
+[ "$missing" -eq 0 ] || exit 1
+ok "cargo and systemd present"
 
-say "Installing"
+# Optional, and only worth mentioning because their absence degrades a feature
+# rather than breaking anything.
+for tool in vips ffmpeg pdftoppm qrencode; do
+    command -v "$tool" >/dev/null || note "optional: $tool not found"
+done
+
+# ── build and install ─────────────────────────────────────────────────────
+step "Building"
+cargo build --release --quiet
+ok "built"
+
+step "Installing"
 mkdir -p "$BIN_DIR" "$UNIT_DIR"
-# Install to a temporary name and rename: replacing a running binary in place
-# fails with ETXTBSY, and a rename is atomic.
+# Replacing a running binary in place fails with ETXTBSY; a rename is atomic.
 install -m 755 target/release/prismd "$BIN_DIR/.prismd.new"
 mv -f "$BIN_DIR/.prismd.new" "$BIN_DIR/prismd"
-echo "  $BIN_DIR/prismd"
-
 install -m 644 systemd/prismd.service "$UNIT_DIR/prismd.service"
-echo "  $UNIT_DIR/prismd.service"
+ok "$BIN_DIR/prismd"
 
 if ! printf '%s' "$PATH" | tr ':' '\n' | grep -qx "$BIN_DIR"; then
-    echo
-    echo "  note: $BIN_DIR is not on your PATH."
-    echo "        fish:  fish_add_path $BIN_DIR"
-    echo "        bash:  echo 'export PATH=\"$BIN_DIR:\$PATH\"' >> ~/.bashrc"
+    warn "$BIN_DIR is not on your PATH"
+    case "$(basename "${SHELL:-}")" in
+        fish) note "fix: fish_add_path $BIN_DIR" ;;
+        zsh)  note "fix: echo 'export PATH=\"$BIN_DIR:\$PATH\"' >> ~/.zshrc" ;;
+        *)    note "fix: echo 'export PATH=\"$BIN_DIR:\$PATH\"' >> ~/.bashrc" ;;
+    esac
 fi
 
-say "Enabling the service"
+# ── configuration ─────────────────────────────────────────────────────────
+step "Configuring"
+if [ -f "$CONFIG_DIR/prism.toml" ]; then
+    ok "existing configuration kept ($CONFIG_DIR)"
+else
+    "$BIN_DIR/prismd" setup | sed 's/^/  /'
+fi
+
+# ── credentials ───────────────────────────────────────────────────────────
+# Enrolment happens on first daemon start, which prints a QR. Starting the
+# service first means that lands in the journal rather than on screen, so it is
+# done here where the operator is looking.
+step "Authenticator"
+if [ -f "$STATE_DIR/totp.secret" ]; then
+    ok "already enrolled ($STATE_DIR/totp.secret)"
+    note "to replace it: prismd enrol --reset"
+else
+    # A short foreground run performs enrolment and prints the QR.
+    timeout 5 "$BIN_DIR/prismd" >/tmp/prism-enrol.$$ 2>&1 || true
+    sed -n '/PRISM ENROLMENT/,/────────────────$/p' /tmp/prism-enrol.$$ \
+        | sed 's/^[0-9T:.Z-]* *INFO *//' || true
+    rm -f /tmp/prism-enrol.$$
+fi
+
+step "Password"
+if [ -f "$STATE_DIR/password.hash" ]; then
+    ok "already set"
+    note "to change it: prismd passwd"
+elif [ -t 0 ]; then
+    note "Sets a quick unlock, so only the first sign-in on a device needs the code."
+    note "Press Ctrl-C to skip; you can run 'prismd passwd' later."
+    "$BIN_DIR/prismd" passwd || warn "skipped — every sign-in will need a code"
+else
+    note "not a terminal; run 'prismd passwd' when you can"
+fi
+
+# ── service ───────────────────────────────────────────────────────────────
+step "Starting"
 systemctl --user daemon-reload
-systemctl --user enable prismd.service >/dev/null
+systemctl --user enable prismd.service >/dev/null 2>&1
 
 # Without lingering the user manager stops at logout, taking Prism with it —
-# which would mean the watchdog dies exactly when the session does.
+# a watchdog that dies with the session is not a watchdog.
 if ! loginctl show-user "$USER" -p Linger --value 2>/dev/null | grep -q yes; then
-    echo "  requesting linger so Prism survives logout (may prompt)"
     loginctl enable-linger "$USER" 2>/dev/null \
-        || echo "  could not enable linger; run: sudo loginctl enable-linger $USER"
+        || note "run later so Prism survives logout: sudo loginctl enable-linger $USER"
 fi
 
 systemctl --user restart prismd.service
 sleep 2
 
-say "Status"
-if systemctl --user is-active --quiet prismd.service; then
-    ADDR=$(systemctl --user show prismd -p MainPID --value | xargs -I{} sh -c \
-        'journalctl --user -u prismd -n 200 --no-pager 2>/dev/null | grep -o "http://[0-9.]*:[0-9]*/" | tail -1' || true)
-    echo "  running${ADDR:+ at $ADDR}"
-    if journalctl --user -u prismd -n 50 --no-pager 2>/dev/null | grep -q "memory locked"; then
-        echo "  memory locked — prismd cannot be paged out"
-    else
-        # Not fatal, but worth being explicit about: the daemon runs, it can
-        # just be swapped out at the moment it is most needed.
-        cat <<'NOTE'
-  note: prismd could not lock its memory, so it can be paged out under the
-        pressure it exists to resolve. The default limit is 8 MiB and is checked
-        against virtual size, which any threaded binary exceeds.
-
-        One-off fix, needs root once:
-          sudo install -Dm644 systemd/50-prism-memlock.conf \
-               /etc/systemd/user.conf.d/50-prism-memlock.conf
-        Then log out and back in, or reboot.
-NOTE
-    fi
-else
-    echo "  failed to start. Recent log:"
+if ! systemctl --user is-active --quiet prismd.service; then
+    warn "failed to start:"
     journalctl --user -u prismd -n 20 --no-pager | sed 's/^/    /'
     exit 1
 fi
 
+URL=$(journalctl --user -u prismd -n 200 --no-pager 2>/dev/null \
+      | grep -o 'http://[0-9.]*:[0-9]*/' | tail -1)
+ok "running${URL:+ at ${URL}}"
+
+if ! journalctl --user -u prismd -n 50 --no-pager 2>/dev/null | grep -q "memory locked"; then
+    warn "prismd cannot lock its memory, so it can be paged out under the"
+    warn "pressure it exists to resolve. One root command fixes it:"
+    note ""
+    note "  sudo install -Dm644 systemd/50-prism-memlock.conf \\"
+    note "       /etc/systemd/user.conf.d/50-prism-memlock.conf"
+    note ""
+    note "then log out and back in. Prism works without it."
+fi
+
+# ── done ──────────────────────────────────────────────────────────────────
 cat <<EOF
 
-Next steps
-  prismd passwd            set the quick-unlock password
-  prismd enrol             enrolment status
-  prismd enrol --reset     revoke and replace the authenticator secret
+$(printf '\033[1mReady\033[0m')
+
+  Open ${URL:-http://localhost:9000/} and sign in with a code from your
+  authenticator. After that this device only needs the password.
+
+  prismd setup      show what was detected
+  prismd passwd     change the password
+  prismd enrol      enrolment status
 
   systemctl --user status prismd
   journalctl --user -u prismd -f
