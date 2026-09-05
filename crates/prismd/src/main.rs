@@ -13,6 +13,7 @@
 mod action;
 mod api;
 mod bind;
+mod discover;
 mod monitor;
 mod enrol;
 mod facets_api;
@@ -215,6 +216,7 @@ async fn serve(
 
     info!(%addr, "prism os listening at http://{addr}/");
     let app = api::router(api::AppState {
+        port: host.server.port,
         auth,
         vitals,
         facets,

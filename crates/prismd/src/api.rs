@@ -85,6 +85,9 @@ pub type SharedVitals = Arc<RwLock<Vitals>>;
 #[derive(Clone)]
 pub struct AppState {
     pub auth: Arc<Authenticator>,
+    /// The port Prism itself is serving on, so the discovery sweep does not
+    /// offer the operator their own desktop as an app to add to it.
+    pub port: u16,
     pub vitals: SharedVitals,
     pub facets: Arc<RwLock<Vec<Facet>>>,
     pub profile_path: Arc<std::path::PathBuf>,
@@ -108,6 +111,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/auth/login", post(login))
         .route("/api/auth/prompt", get(login_prompt))
         .route("/api/vitals", get(vitals))
+        .merge(crate::discover::routes())
         .route("/api/events", get(events))
         // Critical Functions Mode. Merged rather than nested so it shares no
         // middleware with the API surface — see ADR 0002.

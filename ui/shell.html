@@ -2534,7 +2534,7 @@ function snapshot() {
   return {
     v: 1,
     windows: [...wins.values()]
-      .filter(w => SAVEABLE.has(w.app))
+      .filter(w => isSaveable(w.app))
       .map(w => ({
         app: w.app,
         args: w.args || null,
@@ -2551,8 +2551,15 @@ function snapshot() {
 
 /* Windows whose contents are reproducible from arguments alone. A Preview or a
    Limits dialog is transient and restoring one would be noise; a terminal is
-   restored by reattaching to its session, which is handled separately. */
-const SAVEABLE = new Set(['vitals', 'files', 'facets', 'gallery', 'music', 'timeline']);
+   restored by reattaching to its session, which is handled separately.
+
+   Proxied apps qualify too, and their omission was why a reload lost ComfyUI
+   while keeping Vitals: the layout was saved faithfully, with that window
+   never in it. They are matched by prefix rather than listed, since which
+   ones exist is discovered from the host at boot and cannot be enumerated
+   here. */
+const SAVEABLE_NATIVE = new Set(['vitals', 'files', 'facets', 'gallery', 'music', 'timeline']);
+const isSaveable = app => SAVEABLE_NATIVE.has(app) || app.startsWith('proxy:');
 
 function scheduleSave() {
   if (restoring) return;
