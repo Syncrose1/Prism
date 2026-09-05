@@ -14,8 +14,10 @@ mod action;
 mod api;
 mod bind;
 mod monitor;
+mod files_api;
 mod rescue;
 mod term_api;
+mod ui;
 
 use anyhow::Context as _;
 use prism_core::auth::{AuthPolicy, Authenticator, session::SessionKey, totp};
@@ -62,6 +64,32 @@ fn main() -> anyhow::Result<()> {
     let terminals = Arc::new(prism_core::term::session::SessionManager::new(
         term_api::manager_from(&host.terminal),
     ));
+
+    // Roots are canonicalised once at startup, so every later containment check
+    // compares two already-real paths. A configured root that does not exist is
+    // dropped with a warning rather than aborting the daemon.
+    let roots: Vec<prism_core::files::path::Root> = host
+        .files
+        .roots
+        .iter()
+        .filter_map(|r| {
+            match prism_core::files::path::Root::new(&r.name, &r.path, r.writable) {
+                Some(root) => {
+                    info!(name = %root.name, path = %root.path.display(), writable = root.writable, "file root");
+                    Some(root)
+                }
+                None => {
+                    warn!(name = %r.name, path = %r.path.display(), "file root does not exist; skipping");
+                    None
+                }
+            }
+        })
+        .collect();
+    if roots.is_empty() {
+        info!("no file roots configured; the Files app is disabled");
+    }
+    let roots = Arc::new(roots);
+    let thumb_dir = Arc::new(state_dir.join("thumbs"));
     if host.terminal.enabled {
         info!(
             max_sessions = host.terminal.max_sessions,
@@ -85,7 +113,7 @@ fn main() -> anyhow::Result<()> {
         })
         .context("spawning monitor thread")?;
 
-    serve(host, auth, vitals, facets, terminals)
+    serve(host, auth, vitals, facets, terminals, roots, thumb_dir)
 }
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
@@ -95,18 +123,22 @@ async fn serve(
     vitals: api::SharedVitals,
     facets: Arc<Vec<prism_core::config::Facet>>,
     terminals: Arc<prism_core::term::session::SessionManager>,
+    roots: Arc<Vec<prism_core::files::path::Root>>,
+    thumb_dir: Arc<std::path::PathBuf>,
 ) -> anyhow::Result<()> {
     let addr = bind::resolve(&host.server.bind, host.server.port)?;
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .with_context(|| format!("binding {addr}"))?;
 
-    info!(%addr, "api listening");
+    info!(%addr, "prism os listening at http://{addr}/");
     let app = api::router(api::AppState {
         auth,
         vitals,
         facets,
         terminals,
+        roots,
+        thumb_dir,
     });
 
     axum::serve(listener, app)

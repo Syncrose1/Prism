@@ -1,4 +1,7 @@
 <title>Prism OS</title>
+<link rel="stylesheet" href="/ui/vendor/xterm.css">
+<script src="/ui/vendor/xterm.js"></script>
+<script src="/ui/vendor/xterm-addon-fit.js"></script>
 
 <style>
 /* ─────────────────────────────────────────────────────────────
@@ -347,12 +350,29 @@ body {
 .ctable td.n { text-align: right; font-variant-numeric: tabular-nums; color: var(--ink); }
 .prot { color: var(--ink-ghost); font-size: 11px; }
 
-/* ── Simulator ───────────────────────────────────────────── */
-#sim { position: fixed; right: 13px; bottom: calc(var(--dock) + 12px); z-index: 900; display: flex; align-items: center; gap: 6px; padding: 6px 8px; background: rgba(20,23,30,.92); backdrop-filter: blur(14px); border: 1px solid var(--line-hi); border-radius: var(--r); }
-#sim .lbl { font-size: 9px; letter-spacing: .18em; text-transform: uppercase; color: var(--ink-ghost); margin-right: 2px; }
-#sim button { font: inherit; font-size: 10px; letter-spacing: .09em; text-transform: uppercase; padding: 3px 8px; border-radius: 2px; cursor: pointer; background: transparent; border: 1px solid var(--line-hi); color: var(--ink-faint); }
-#sim button:hover { color: var(--ink); }
-#sim button.sel { color: var(--void); background: var(--ink); border-color: var(--ink); }
+/* ── Login ───────────────────────────────────────────────── */
+#login {
+  position: fixed; inset: 0; z-index: 950; display: grid; place-items: center;
+  background: var(--void);
+}
+#login.hide { display: none; }
+.lg {
+  width: min(340px, 88vw); text-align: center;
+  animation: rise .5s cubic-bezier(.2,.9,.25,1) backwards;
+}
+.lg .m { margin-bottom: 22px; display: flex; justify-content: center; }
+.lg h1 { font-size: 11.5px; letter-spacing: .34em; text-transform: uppercase; font-weight: 500; margin: 0 0 6px; }
+.lg p { color: var(--ink-faint); font-size: 11.5px; margin: 0 0 20px; }
+.lg input {
+  width: 100%; padding: 12px 14px; font: inherit; font-size: 20px; text-align: center;
+  letter-spacing: .5em; text-indent: .5em;
+  background: var(--surface); border: 1px solid var(--line-hi); border-radius: var(--r);
+  color: var(--ink); outline: none; transition: border-color .18s;
+}
+.lg input:focus { border-color: var(--ink-faint); }
+.lg .msg { min-height: 18px; margin-top: 12px; font-size: 11.5px; color: var(--red); }
+.lg .hint { margin-top: 20px; font-size: 10.5px; color: var(--ink-ghost); line-height: 1.7; }
+
 
 @media (max-width: 760px) {
   .host, .searchbtn span, .spectrum .lbl { display: none; }
@@ -417,12 +437,23 @@ body {
   </table>
 </div>
 
-<div id="sim">
-  <span class="lbl">Simulate</span>
-  <button data-t="green" class="sel">Green</button>
-  <button data-t="amber">Amber</button>
-  <button data-t="red">Red</button>
-  <button data-t="black">Black</button>
+<div id="login">
+  <div class="lg">
+    <div class="m">
+      <svg width="40" height="30" viewBox="0 0 24 18" fill="none">
+        <path d="M0 8.2 H7.4" stroke="#e8ebf0" stroke-width="1.1"/>
+        <path d="M8 14.4 L13.4 3.2 L18.8 14.4 Z" stroke="#5c6472" stroke-width="1.1" fill="none"/>
+        <path d="M18.2 11.1 H24" stroke="#4ade80" stroke-width="1.1"/>
+        <path d="M18.4 12.5 H24" stroke="#fbbf24" stroke-width="1.1"/>
+        <path d="M18.6 13.9 H24" stroke="#fb7185" stroke-width="1.1"/>
+      </svg>
+    </div>
+    <h1>Prism</h1>
+    <p>Enter the code from your authenticator</p>
+    <input id="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="000000" autofocus>
+    <div class="msg" id="loginMsg"></div>
+    <div class="hint">No JavaScript? Use <b>/rescue</b>.</div>
+  </div>
 </div>
 
 <script>
@@ -507,7 +538,14 @@ function focus(win) {
   syncDock();
 }
 
-function close(win) { win.el.remove(); wins.delete(win.id); syncDock(); }
+function close(win) {
+  // Detach, never kill: the session and anything it launched carry on.
+  const body = win.el.querySelector('.body')?.firstElementChild;
+  if (body && body.__onClose) body.__onClose();
+  win.el.remove();
+  wins.delete(win.id);
+  syncDock();
+}
 
 function toggleMax(win) {
   const el = win.el;
@@ -614,82 +652,161 @@ function appVitals() {
   const d = el(`
     <div class="hero">
       <div class="k">Honest headroom</div>
-      <div class="v"><span data-head>34.3</span><small>GiB</small></div>
-      <div class="sub"><b data-phantom>6.4 GiB</b> of advertised headroom cannot exist</div>
+      <div class="v"><span data-head>—</span><small>GiB</small></div>
+      <div class="sub"><b data-phantom>—</b> of advertised headroom cannot exist</div>
     </div>
     <svg class="spark" viewBox="0 0 300 38" preserveAspectRatio="none"><path class="fill"></path><path class="line"></path></svg>
     <div class="rows">
       <div class="row"><span class="rk">Memory stall</span><span class="meter"><i data-stallbar style="width:2%"></i></span><span class="rv" data-stall>0.1%</span></div>
-      <div class="row"><span class="rk">RAM</span><span class="meter"><i data-rambar style="width:14%"></i></span><span class="rv">4.4 / 30.7 GiB</span></div>
-      <div class="row"><span class="rk">zram swap</span><span class="meter"><i style="width:9%"></i></span><span class="rv">1.4 / 15.4 GiB</span></div>
-      <div class="row"><span class="rk">Compression</span><span class="rv">2.17 ×</span></div>
-      <div class="row"><span class="rk">Disk /</span><span class="meter"><i style="width:94%"></i></span><span class="rv">43.7 GiB free</span></div>
-      <div class="row"><span class="rk">GPU</span><span class="meter"><i style="width:7%"></i></span><span class="rv">0.9 / 12 GiB</span></div>
+      <div class="row"><span class="rk">RAM</span><span class="meter"><i data-rambar style="width:0%"></i></span><span class="rv" data-ram>—</span></div>
+      <div class="row"><span class="rk">zram swap</span><span class="meter"><i data-swapbar style="width:0%"></i></span><span class="rv" data-swap>—</span></div>
+      <div class="row"><span class="rk">Compression</span><span class="rv" data-compr>—</span></div>
+      <div class="row" data-diskrow><span class="rk" data-disklabel>Disk</span><span class="meter"><i data-diskbar style="width:0%"></i></span><span class="rv" data-disk>—</span></div>
     </div>`);
   vitalsPanels.push(d);
   paintVitals(d);
   return d;
 }
 
-function appFiles(startPath = '') {
+let ROOTS = [];
+async function loadRoots() {
+  try { ROOTS = await API.get('/api/files/roots'); } catch { ROOTS = []; }
+}
+
+const FICON = { dir:'▸', image:'▤', video:'▶', audio:'♪', text:'≡', pdf:'▦', archive:'▣', other:'◆' };
+const fmtSize = b => {
+  if (b === null || b === undefined) return '—';
+  const u = ['B','KB','MB','GB','TB'];
+  let i = 0, n = b;
+  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+  return (i === 0 ? n : n.toFixed(n < 10 ? 1 : 0)) + ' ' + u[i];
+};
+
+function appFiles(startRoot, startPath = '') {
   const d = el(`<div class="crumb"></div><div class="flist"></div>`);
+  let root = startRoot || (ROOTS[0] && ROOTS[0].name) || '';
   let path = startPath;
 
-  function render() {
-    const node = FS[path] || { dirs: [], files: [] };
-    const crumb = d.querySelector('.crumb'), list = d.querySelector('.flist');
-    const parts = path ? path.split('/') : [];
+  async function render() {
+    const list = d.querySelector('.flist'), crumb = d.querySelector('.crumb');
+    if (!root) {
+      list.innerHTML = '<div class="empty">no file roots configured</div>';
+      return;
+    }
+    list.innerHTML = '<div class="empty">loading…</div>';
 
+    let data;
+    try {
+      data = await API.get(`/api/files/list?root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}&limit=500`);
+    } catch (e) {
+      list.innerHTML = '';
+      const m = document.createElement('div');
+      m.className = 'empty'; m.textContent = e.message || 'could not read directory';
+      list.append(m);
+      return;
+    }
+
+    // Breadcrumb: root first, then each segment, each navigable.
     crumb.innerHTML = '';
-    const home = document.createElement('a'); home.textContent = 'home';
-    home.onclick = () => { path = ''; render(); };
-    crumb.append(home);
+    const mk = (label, go) => {
+      const a = document.createElement('a'); a.textContent = label; a.onclick = go; return a;
+    };
+    const sep = () => { const x = document.createElement('s'); x.textContent = '/'; return x; };
+    crumb.append(mk(root, () => { path = ''; render(); }));
+    const parts = data.path ? data.path.split('/') : [];
     parts.forEach((p, i) => {
-      const s = document.createElement('s'); s.textContent = '/'; crumb.append(s);
-      const a = document.createElement('a'); a.textContent = p;
-      a.onclick = () => { path = parts.slice(0, i + 1).join('/'); render(); };
-      crumb.append(a);
+      crumb.append(sep(), mk(p, () => { path = parts.slice(0, i + 1).join('/'); render(); }));
     });
 
     list.innerHTML = '';
-    if (!node.dirs.length && !node.files.length) {
+    if (!data.entries.length) {
       list.innerHTML = '<div class="empty">empty directory</div>';
     }
-    node.dirs.forEach(name => {
+    for (const e of data.entries) {
       const row = document.createElement('div');
-      row.className = 'f dir';
-      row.innerHTML = `<span class="ic">▸</span><span class="nm"></span><span class="sz">—</span>`;
-      row.querySelector('.nm').textContent = name;
-      row.onclick = () => { path = path ? path + '/' + name : name; render(); };
+      row.className = 'f' + (e.is_dir ? ' dir' : '');
+      row.innerHTML = `<span class="ic">${FICON[e.kind] || '◆'}</span><span class="nm"></span><span class="sz">${e.is_dir ? '—' : fmtSize(e.size)}</span>`;
+      row.querySelector('.nm').textContent = e.name + (e.is_link ? ' →' : '');
+      const full = data.path ? `${data.path}/${e.name}` : e.name;
+
+      if (e.is_dir) {
+        row.onclick = () => { path = full; render(); };
+      } else {
+        row.onclick = () => {
+          list.querySelectorAll('.f').forEach(f => f.classList.remove('sel'));
+          row.classList.add('sel');
+        };
+        row.ondblclick = () => openPreview(root, full, e);
+      }
       list.append(row);
-    });
-    node.files.forEach(([name, size, kind]) => {
-      const row = document.createElement('div');
-      row.className = 'f';
-      row.innerHTML = `<span class="ic">${FICON[kind] || '◆'}</span><span class="nm"></span><span class="sz">${size}</span>`;
-      row.querySelector('.nm').textContent = name;
-      row.onclick = () => { list.querySelectorAll('.f').forEach(f => f.classList.remove('sel')); row.classList.add('sel'); };
-      // Double-click opens a real window — this is the difference between
-      // a list of filenames and a filesystem you can operate.
-      row.ondblclick = () => openPreview(name, size, kind);
-      list.append(row);
-    });
+    }
 
     const win = d.closest('.win');
-    if (win) win.querySelector('.meta').textContent =
-      (path || 'home') + ' · ' + (node.dirs.length + node.files.length) + ' items';
+    if (win) {
+      win.querySelector('.meta').textContent =
+        `${data.path || root} · ${data.total} item${data.total === 1 ? '' : 's'}`;
+    }
   }
+
   render();
   return d;
 }
 
-function openPreview(name, size, kind) {
-  const label = { img:'Image', vid:'Video', txt:'Text', pdf:'Document', bin:'Binary' }[kind] || 'File';
-  const content = el(`<div class="pv">
-      <div class="frame">${kind === 'img' || kind === 'vid' ? label + ' preview' : 'No preview'}</div>
-      <div class="meta"><b>${name}</b><br>${label} · ${size}</div>
-    </div>`);
-  makeWindow({ app: 'preview', title: 'Preview', meta: name, w: 340, h: 320, content });
+function openPreview(root, path, entry) {
+  const url = `/api/files/raw?root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}`;
+  const content = el('<div class="pv"></div>');
+  const pv = content.querySelector('.pv');
+
+  const meta = document.createElement('div');
+  meta.className = 'meta';
+  meta.innerHTML = `<b></b><br>${entry.kind} · ${fmtSize(entry.size)}`;
+  meta.querySelector('b').textContent = entry.name;
+
+  if (entry.kind === 'image') {
+    const img = document.createElement('img');
+    img.src = url;
+    img.style.cssText = 'max-width:100%;max-height:100%;border-radius:4px;object-fit:contain';
+    pv.append(img);
+  } else if (entry.kind === 'video') {
+    const v = document.createElement('video');
+    v.src = url; v.controls = true;
+    v.style.cssText = 'max-width:100%;max-height:100%;border-radius:4px';
+    pv.append(v);
+  } else if (entry.kind === 'audio') {
+    const a = document.createElement('audio');
+    a.src = url; a.controls = true; a.style.width = '100%';
+    pv.append(a);
+  } else if (entry.kind === 'text') {
+    const pre = document.createElement('pre');
+    pre.style.cssText = 'margin:0;width:100%;max-height:100%;overflow:auto;font:inherit;font-size:11.5px;color:var(--ink-dim);white-space:pre-wrap;user-select:text';
+    pre.textContent = 'loading…';
+    // Bounded: a 20 GiB model file must not be rendered into the DOM.
+    fetch(url, { credentials: 'same-origin' })
+      .then(r => r.text())
+      .then(t => { pre.textContent = t.slice(0, 200000); })
+      .catch(() => { pre.textContent = 'could not read file'; });
+    pv.append(pre);
+  } else if (entry.kind === 'pdf') {
+    const f = document.createElement('iframe');
+    f.src = url;
+    f.style.cssText = 'width:100%;height:100%;border:none;border-radius:4px;background:#fff';
+    pv.append(f);
+  } else {
+    const box = document.createElement('div');
+    box.className = 'frame';
+    box.textContent = 'No preview';
+    pv.append(box);
+  }
+
+  pv.append(meta);
+  const dl = document.createElement('a');
+  dl.href = url + '&download=true';
+  dl.className = 'btn';
+  dl.textContent = 'Download';
+  dl.style.textDecoration = 'none';
+  pv.append(dl);
+
+  makeWindow({ app: 'preview', title: 'Preview', meta: entry.name, w: 420, h: 400, content });
 }
 
 function appFacets() {
@@ -732,81 +849,89 @@ function appTimeline() {
     </div>`);
 }
 
-/* A simulated terminal. The real one attaches to /api/term/{id}/attach over a
-   WebSocket and renders with xterm.js; this reproduces the interaction so the
-   lifecycle — detach keeps running, kill destroys — can be seen in the design. */
-let termSeq = 0;
-function appTerminal() {
-  const id = 'term-' + (++termSeq);
-  const d = el(`<div class="term" tabindex="0"></div>`);
-  const view = d.querySelector('.term');
-  const state = { line: '', running: null, cwd: '~' };
+/* The real terminal: xterm.js bound to a PTY on the host over a WebSocket.
+   Closing the window detaches — the session and anything it launched keep
+   running. Only Kill destroys, via cgroup.kill. See ADR 0003. */
+function appTerminal(existingId) {
+  const d = el('<div style="height:100%;position:relative"><div class="xt" style="height:100%"></div></div>');
+  const host = d.querySelector('.xt');
 
-  const CWD = () => `<span class="p">raahats@c2</span><span class="d">:</span><span class="hi">${state.cwd}</span><span class="d">$</span> `;
-  let out = `Prism terminal · session ${id} · scope prism-${id}.scope\n\n`;
-
-  function paint() {
-    view.innerHTML = out + (state.running ? '' : CWD() + esc(state.line) + '<span class="cur"></span>');
-    view.scrollTop = view.scrollHeight;
-  }
-  function esc(t) { return t.replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
-  function say(t) { out += t; paint(); }
-
-  // The operator's real script: prompts twice, then launches.
-  const SCRIPT = {
-    steps: [
-      'ComfyUI-Easy-Install\nPress Enter to continue: ',
-      '\nConfirm GPU (Enter): ',
-      '\nLAUNCHED: serving on 127.0.0.1:8188\n'
-    ]
-  };
-
-  function run(cmd) {
-    say(CWD() + esc(cmd) + '\n');
-    const c = cmd.trim();
-    if (c === 'clear') { out = ''; return paint(); }
-    if (c.startsWith('cd ')) { state.cwd = '~/' + c.slice(3).replace(/^~\/?/, ''); return paint(); }
-    if (c === 'ls') { return say('ComfyUI  llama.cpp  Documents  Prism\n'); }
-    if (c.includes('run_nvidia_gpu.sh') || c.includes('fake_comfy')) {
-      state.running = { step: 0 };
-      say(SCRIPT.steps[0]);
-      const w = d.closest('.win');
-      if (w) w.querySelector('.meta').innerHTML = '<span class="termbadge live">running</span>';
-      return;
+  const term = new Terminal({
+    fontFamily: 'ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace',
+    fontSize: 12.5,
+    lineHeight: 1.2,
+    cursorBlink: true,
+    scrollback: 5000,
+    theme: {
+      background: '#06070a', foreground: '#cfd6df', cursor: '#e8ebf0',
+      selectionBackground: 'rgba(255,255,255,.16)',
+      black: '#0a0c10', red: '#fb7185', green: '#4ade80', yellow: '#fbbf24',
+      blue: '#60a5fa', magenta: '#c084fc', cyan: '#67e8f9', white: '#cfd6df',
+      brightBlack: '#5c6472', brightRed: '#fda4af', brightGreen: '#86efac',
+      brightYellow: '#fcd34d', brightBlue: '#93c5fd', brightMagenta: '#d8b4fe',
+      brightCyan: '#a5f3fc', brightWhite: '#e8ebf0'
     }
-    if (c === '') return paint();
-    say(`prism: command not found: ${esc(c)}\n`);
-  }
-
-  view.addEventListener('keydown', e => {
-    e.preventDefault();
-    if (state.running) {
-      // Answering a prompt — the thing a pipe could never do.
-      if (e.key === 'Enter') {
-        state.running.step++;
-        const next = SCRIPT.steps[state.running.step];
-        if (next) say(next);
-        if (state.running.step >= SCRIPT.steps.length - 1) {
-          say('\n(workload running — closing this window detaches, it keeps going)\n');
-          state.running = null;
-          paint();
-        }
-      }
-      return;
-    }
-    if (e.key === 'Enter') { const c = state.line; state.line = ''; run(c); }
-    else if (e.key === 'Backspace') { state.line = state.line.slice(0, -1); paint(); }
-    else if (e.key.length === 1) { state.line += e.key; paint(); }
   });
+  const fit = new FitAddon.FitAddon();
+  term.loadAddon(fit);
 
-  setTimeout(() => view.focus(), 60);
-  paint();
+  let ws = null, sid = existingId || null;
+
+  async function start() {
+    term.open(host);
+    // The element has no size until it is in the document.
+    requestAnimationFrame(() => { try { fit.fit(); } catch {} });
+
+    if (!sid) {
+      term.writeln('\x1b[38;5;245mopening session…\x1b[0m');
+      try {
+        const info = await API.post('/api/term', {
+          rows: term.rows, cols: term.cols, title: 'Terminal'
+        });
+        sid = info.id;
+      } catch (e) {
+        term.writeln(`\x1b[31m${e.message}\x1b[0m`);
+        return;
+      }
+      term.reset();
+    }
+
+    const win = d.closest('.win');
+    if (win) win.querySelector('.meta').innerHTML = '<span class="termbadge live">attached</span>';
+
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    ws = new WebSocket(`${proto}://${location.host}/api/term/${sid}/attach`);
+    ws.binaryType = 'arraybuffer';
+
+    ws.onmessage = e => term.write(new Uint8Array(e.data));
+    ws.onclose = () => {
+      if (win) win.querySelector('.meta').innerHTML = '<span class="termbadge det">detached</span>';
+    };
+    // Keystrokes as raw bytes; escape sequences must survive intact.
+    term.onData(data => {
+      if (ws && ws.readyState === 1) ws.send(new TextEncoder().encode(data));
+    });
+    term.onResize(({ rows, cols }) => {
+      if (sid) API.post(`/api/term/${sid}/resize`, { rows, cols }).catch(() => {});
+    });
+  }
+
+  // Refit when the window is resized or restored.
+  const ro = new ResizeObserver(() => { try { fit.fit(); } catch {} });
+  requestAnimationFrame(() => { ro.observe(host); start(); });
+
+  // Closing the window detaches only. Kill is a separate, explicit action.
+  d.__onClose = () => { if (ws) ws.close(); ro.disconnect(); };
+  d.__kill = async () => {
+    if (sid) { try { await API.post(`/api/term/${sid}/kill`); } catch {} }
+  };
+  d.__session = () => sid;
   return d;
 }
 
 const APPS = {
   vitals:   { title: 'Vitals',   w: 348, h: 400, make: appVitals },
-  files:    { title: 'Files',    w: 396, h: 330, make: () => appFiles('ComfyUI/output') },
+  files:    { title: 'Files',    w: 430, h: 380, make: () => appFiles() },
   facets:   { title: 'Facets',   w: 392, h: 286, make: appFacets },
   media:    { title: 'Media',    w: 400, h: 360, make: appMedia },
   timeline: { title: 'Timeline', w: 420, h: 240, make: appTimeline },
@@ -856,8 +981,8 @@ function buildPalette(q = '') {
   Object.keys(FS).forEach(p =>
     items.push({ ic: '▸', label: p ? 'home/' + p : 'home', hint: 'Folder',
       run: () => makeWindow({ app:'files', title:'Files', w:396, h:330, content: appFiles(p) }) }));
-  ['green','amber','red','black'].forEach(t =>
-    items.push({ ic: '◈', label: `Simulate ${t} tier`, hint: 'Action', run: () => setTier(t) }));
+  items.push({ ic: '◈', label: 'Open rescue interface', hint: 'Action',
+    run: () => window.open('/rescue', '_blank') });
   items.push({ ic: '⊘', label: 'Close all windows', hint: 'Action', run: () => [...wins.values()].forEach(close) });
 
   const needle = q.toLowerCase();
@@ -911,51 +1036,130 @@ desk.addEventListener('contextmenu', e => {
 });
 addEventListener('pointerdown', e => { if (!e.target.closest('#ctx')) hideCtx(); });
 
+/* ── API ─────────────────────────────────────────────────────
+   Every panel reads from the daemon. Nothing below is simulated. */
+const API = {
+  async get(url) {
+    const r = await fetch(url, { credentials: 'same-origin' });
+    if (r.status === 401 || r.status === 403) { showLogin(); throw new Error('auth'); }
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+    return r.json();
+  },
+  async post(url, body) {
+    const r = await fetch(url, {
+      method: 'POST', credentials: 'same-origin',
+      headers: { 'content-type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body)
+    });
+    if (r.status === 401 || r.status === 403) { showLogin(); throw new Error('auth'); }
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+    return r.status === 204 ? null : r.json();
+  }
+};
+
+/* ── login ───────────────────────────────────────────────── */
+const loginEl = $('#login'), codeEl = $('#code'), msgEl = $('#loginMsg');
+function showLogin() { loginEl.classList.remove('hide'); setTimeout(() => codeEl.focus(), 50); }
+function hideLogin() { loginEl.classList.add('hide'); }
+
+codeEl.addEventListener('input', async () => {
+  const v = codeEl.value.replace(/\D/g, '').slice(0, 6);
+  codeEl.value = v;
+  if (v.length !== 6) return;
+  msgEl.textContent = '';
+  try {
+    await API.post('/api/auth/login', { code: v });
+    codeEl.value = '';
+    hideLogin();
+    boot();
+  } catch (e) {
+    msgEl.textContent = e.message || 'incorrect code';
+    codeEl.value = '';
+  }
+});
+
 /* ── tier ────────────────────────────────────────────────── */
 const vitalsPanels = [];
-const hist = Array.from({ length: 60 }, (_, i) => 34 + Math.sin(i / 6) * 1.4 + Math.random() * .8);
-const TIERS = {
-  green: { head: 34.3, phantom: '6.4 GiB', stall: 0.1  },
-  amber: { head: 3.6,  phantom: '7.1 GiB', stall: 6.4  },
-  red:   { head: 1.4,  phantom: '7.8 GiB', stall: 24.3 },
-  black: { head: 0.4,  phantom: '8.2 GiB', stall: 61.7 }
-};
+const hist = [];
 let tier = 'green';
+let V = null;              // latest /api/vitals payload
+const gib = m => (m / 1024).toFixed(1);
 
 function paintVitals(d) {
-  const t = TIERS[tier], W = 300, H = 38;
-  const lo = Math.min(...hist) - 1, hi = Math.max(...hist) + 1;
-  const path = hist.map((v, i) => `${i ? 'L' : 'M'}${(i / (hist.length - 1) * W).toFixed(1)} ${(H - ((v - lo) / (hi - lo)) * (H - 6) - 3).toFixed(1)}`).join(' ');
-  const q = s => d.querySelector(s);
-  q('.line').setAttribute('d', path);
-  q('.fill').setAttribute('d', path + ` L${W} ${H} L0 ${H} Z`);
-  q('[data-head]').textContent = t.head.toFixed(1);
-  q('[data-phantom]').textContent = t.phantom;
-  q('[data-stall]').textContent = t.stall.toFixed(1) + '%';
-  const sb = q('[data-stallbar]'); sb.style.width = Math.min(100, t.stall * 1.5) + '%'; sb.className = t.stall > 5 ? 'hot' : '';
-  q('[data-rambar]').style.width = (100 - t.head / 30.7 * 100).toFixed(0) + '%';
+  if (!V) return;
+  const W = 300, H = 38, q = s => d.querySelector(s);
+
+  if (hist.length > 1) {
+    const lo = Math.min(...hist), hi = Math.max(...hist), span = (hi - lo) || 1;
+    const path = hist.map((v, i) =>
+      `${i ? 'L' : 'M'}${(i / (hist.length - 1) * W).toFixed(1)} ${(H - ((v - lo) / span) * (H - 6) - 3).toFixed(1)}`
+    ).join(' ');
+    q('.line').setAttribute('d', path);
+    q('.fill').setAttribute('d', path + ` L${W} ${H} L0 ${H} Z`);
+  }
+
+  const stallPct = V.stall_full * 100;
+  q('[data-head]').textContent = gib(V.honest_headroom_mib);
+  q('[data-phantom]').textContent = gib(V.phantom_headroom_mib) + ' GiB';
+  q('[data-stall]').textContent = stallPct.toFixed(1) + '%';
+  const sb = q('[data-stallbar]');
+  sb.style.width = Math.min(100, stallPct * 1.5) + '%';
+  sb.className = stallPct > 5 ? 'hot' : '';
+
+  const usedMib = V.total_mib - V.available_mib;
+  q('[data-rambar]').style.width = (usedMib / V.total_mib * 100).toFixed(0) + '%';
+  q('[data-ram]').textContent = `${gib(usedMib)} / ${gib(V.total_mib)} GiB`;
+
+  const swapUsed = V.swap_total_mib - V.swap_free_mib;
+  q('[data-swapbar]').style.width = V.swap_total_mib ? (swapUsed / V.swap_total_mib * 100).toFixed(0) + '%' : '0%';
+  q('[data-swap]').textContent = V.swap_total_mib
+    ? `${gib(swapUsed)} / ${gib(V.swap_total_mib)} GiB` : 'none';
+  q('[data-compr]').textContent = V.compression_ratio ? V.compression_ratio.toFixed(2) + ' ×' : '—';
+
+  if (V.disk) {
+    q('[data-diskrow]').style.display = '';
+    q('[data-disklabel]').textContent = 'Disk ' + V.disk.path;
+    q('[data-diskbar]').style.width = V.disk.used_pct.toFixed(0) + '%';
+    q('[data-disk]').textContent = gib(V.disk.free_mib) + ' GiB free';
+  } else {
+    q('[data-diskrow]').style.display = 'none';
+  }
 }
 
 function setTier(t) {
-  tier = t; root.dataset.tier = t;
+  tier = t;
+  root.dataset.tier = t;
   $('#tierWord').textContent = t[0].toUpperCase() + t.slice(1);
-  hist.push(TIERS[t].head + Math.random() * .6); hist.shift();
-  vitalsPanels.forEach(p => p.isConnected && paintVitals(p));
   $('#critical').classList.toggle('show', t === 'black');
-  document.querySelectorAll('#sim button').forEach(b => b.classList.toggle('sel', b.dataset.t === t));
 }
-document.querySelectorAll('#sim button').forEach(b => b.onclick = () => setTier(b.dataset.t));
 
-setInterval(() => {
-  if (tier !== 'green') return;
-  hist.push(34 + Math.sin(Date.now() / 9000) * 1.2 + Math.random() * .7); hist.shift();
-  vitalsPanels.forEach(p => p.isConnected && paintVitals(p));
-}, 2200);
+/* Poll the daemon. A WebSocket feed is the eventual shape, but polling at 2s
+   is honest, trivially resilient to a reconnect, and costs nothing measurable. */
+async function refreshVitals() {
+  try {
+    V = await API.get('/api/vitals');
+    hist.push(V.honest_headroom_mib / 1024);
+    if (hist.length > 60) hist.shift();
+    setTier(V.tier);
+    vitalsPanels.forEach(p => p.isConnected && paintVitals(p));
+  } catch (e) { /* auth handled in API.get */ }
+}
 
 /* ── boot ────────────────────────────────────────────────── */
-launch('vitals');
-launch('files');
-launch('terminal');
-setTier('green');
+let booted = false;
+async function boot() {
+  if (booted) return;
+  try {
+    await API.get('/api/vitals');     // proves the session before drawing
+  } catch { return; }                 // showLogin already called
+  booted = true;
+  hideLogin();
+  await refreshVitals();
+  setInterval(refreshVitals, 2000);
+  loadRoots();
+  launch('vitals');
+  launch('files');
+}
+boot();
 })();
 </script>

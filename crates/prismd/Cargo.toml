@@ -17,8 +17,12 @@ libc = "0.2"
 # Minimal runtime: no fs/process/time features pulled in beyond what the server
 # needs. The monitor loop stays synchronous on its own thread so pressure
 # handling never waits on an async runtime that is itself starved.
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal"] }
 axum = { version = "0.8", features = ["ws"] }
 # Splitting the WebSocket into an independent sink and stream, so terminal
 # output can be pumped while keystrokes are read concurrently.
 futures-util = { version = "0.3", default-features = false }
+
+# The shell is embedded in the binary: one artefact to deploy, no build step,
+# and nothing to fetch at first paint. See ADR 0001.
+rust-embed = "8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "fs", "process"] }

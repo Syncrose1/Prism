@@ -88,6 +88,8 @@ pub struct AppState {
     pub vitals: SharedVitals,
     pub facets: Arc<Vec<Facet>>,
     pub terminals: Arc<prism_core::term::session::SessionManager>,
+    pub roots: Arc<Vec<prism_core::files::path::Root>>,
+    pub thumb_dir: Arc<std::path::PathBuf>,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -99,6 +101,9 @@ pub fn router(state: AppState) -> Router {
         // middleware with the API surface — see ADR 0002.
         .merge(crate::rescue::routes())
         .merge(crate::term_api::routes())
+        .merge(crate::files_api::routes())
+        .route("/", get(crate::ui::index))
+        .route("/ui/{*path}", get(crate::ui::asset))
         .with_state(state)
 }
 
