@@ -252,6 +252,32 @@ impl SessionManager {
         size: WinSize,
         title: &str,
     ) -> Result<Arc<Session>, SpawnError> {
+        self.create_with(argv, cwd, size, title, false)
+    }
+
+    /// As [`Self::create`], but the command is made proof against hangup.
+    ///
+    /// Used for facets: a long-running workload started through a terminal
+    /// should survive the terminal, and the daemon, and anything short of an
+    /// explicit Kill.
+    pub fn create_hangup_proof(
+        &self,
+        argv: &[String],
+        cwd: Option<&str>,
+        size: WinSize,
+        title: &str,
+    ) -> Result<Arc<Session>, SpawnError> {
+        self.create_with(argv, cwd, size, title, true)
+    }
+
+    fn create_with(
+        &self,
+        argv: &[String],
+        cwd: Option<&str>,
+        size: WinSize,
+        title: &str,
+        hangup_proof: bool,
+    ) -> Result<Arc<Session>, SpawnError> {
         if !self.cfg.enabled {
             return Err(SpawnError::Disabled);
         }
@@ -282,6 +308,20 @@ impl SessionManager {
         // terminal they normally open, rather than a bare non-login shell.
         let base: Vec<String> = if argv.is_empty() {
             vec![self.cfg.shell.clone(), "-l".to_string()]
+        } else if hangup_proof {
+            // A workload launched through a terminal must outlive the terminal.
+            // Ignoring SIGHUP before exec is enough: a signal set to *ignored*
+            // survives exec, unlike one that is merely caught. Without this,
+            // closing the window or restarting the daemon kills the workload,
+            // which is exactly what detaching is supposed to prevent.
+            let mut v = vec![
+                "/bin/sh".to_string(),
+                "-c".into(),
+                r#"trap "" HUP; exec "$@""#.into(),
+                "prism".into(),
+            ];
+            v.extend(argv.iter().cloned());
+            v
         } else {
             argv.to_vec()
         };
@@ -550,6 +590,50 @@ mod tests {
             "closing a window must not kill the workload it launched"
         );
         assert!(!s.has_exited());
+        m.kill(&s.id);
+    }
+
+    #[test]
+    fn a_hangup_proof_command_ignores_sighup() {
+        // The bug this prevents: restarting the daemon killed every workload
+        // launched through a terminal, which is the opposite of what detaching
+        // promises. `trap "" HUP` before exec survives the exec, because an
+        // ignored disposition does and a caught one does not.
+        let m = mgr();
+        let s = m
+            .create_hangup_proof(
+                &["sleep".into(), "30".into()],
+                None,
+                WinSize::default(),
+                "proof",
+            )
+            .expect("create");
+        std::thread::sleep(Duration::from_millis(400));
+
+        // Signal the whole group, as closing a terminal would.
+        let pid = s.pid();
+        unsafe { libc::kill(-(pid as i32), libc::SIGHUP) };
+        std::thread::sleep(Duration::from_millis(400));
+
+        assert!(
+            std::path::Path::new(&format!("/proc/{pid}")).exists(),
+            "a facet must survive a hangup"
+        );
+        m.kill(&s.id);
+    }
+
+    #[test]
+    fn an_ordinary_session_is_not_wrapped() {
+        // A plain terminal should be the operator's shell, not a shell inside a
+        // wrapper, or the process tree and job control become confusing.
+        let m = mgr();
+        let s = m
+            .create(&["sleep".into(), "30".into()], None, WinSize::default(), "plain")
+            .expect("create");
+        std::thread::sleep(Duration::from_millis(300));
+        let cmdline = std::fs::read_to_string(format!("/proc/{}/cmdline", s.pid()))
+            .unwrap_or_default();
+        assert!(cmdline.contains("sleep"), "got {cmdline:?}");
         m.kill(&s.id);
     }
 

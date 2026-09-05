@@ -269,9 +269,22 @@ impl Pty {
 
 impl Drop for Pty {
     fn drop(&mut self) {
-        // Closing the master sends SIGHUP to the foreground process group, so a
-        // dropped Pty does not leave an orphaned shell attached to nothing.
-        let _ = self.signal(libc::SIGHUP);
+        // Deliberately does not signal the child.
+        //
+        // This used to send SIGHUP, on the reasoning that a dropped Pty should
+        // not leave an orphaned shell. In practice it meant every session died
+        // when the daemon restarted — including workloads launched from one,
+        // which is the opposite of what detaching is supposed to guarantee.
+        // Restarting prismd to pick up a fix would kill the ComfyUI run the fix
+        // was meant to help.
+        //
+        // Destroying a session is `Session::destroy`, which uses `cgroup.kill`
+        // and takes the whole tree atomically. That is the only place a session
+        // should die, and it is reached only from an explicit Kill.
+        //
+        // The master fd still closes here, which the kernel reports to the
+        // child as EIO on the next read. A shell will exit on that; a workload
+        // told to ignore SIGHUP will not.
     }
 }
 

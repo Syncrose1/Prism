@@ -354,7 +354,9 @@ async fn start(
     if facet.pty {
         let title = facet.name.clone();
         let cwd = facet.cwd.as_ref().map(|p| p.display().to_string());
-        return match state.terminals.create(
+        // Hangup-proof: a facet is a workload, not a shell. It must outlive the
+        // window it was launched from and the daemon that launched it.
+        return match state.terminals.create_hangup_proof(
             &facet.command,
             cwd.as_deref(),
             prism_core::term::pty::WinSize { rows: 30, cols: 100 },

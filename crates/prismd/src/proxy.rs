@@ -154,9 +154,24 @@ async fn forward_root(
 
 async fn forward(
     state: State<AppState>,
-    Path((id, path)): Path<(String, String)>,
+    Path((id, _decoded)): Path<(String, String)>,
     req: Request,
 ) -> Response {
+    // The extractor's path is deliberately ignored. Axum percent-decodes it,
+    // which silently rewrites the request: ComfyUI addresses a workflow as
+    // `userdata/workflows%2FName.json`, and decoding turns that single segment
+    // into two, so the app 404s and the UI appears not to respond. A name
+    // containing a space decodes to an invalid URI and fails harder.
+    //
+    // The raw path from the URI is forwarded verbatim instead, so whatever the
+    // browser encoded is what the app receives.
+    let raw = req.uri().path();
+    let prefix = format!("/facet/{id}");
+    let path = raw
+        .strip_prefix(&prefix)
+        .map(|rest| rest.trim_start_matches('/'))
+        .unwrap_or("")
+        .to_string();
     proxy(state, id, path, req).await
 }
 
@@ -575,6 +590,49 @@ mod tests {
         // mistaken call is harmless.
         let png = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR";
         assert_eq!(inject_base(png, "/facet/app"), png.to_vec());
+    }
+
+    /// Mirrors the extraction in `forward`, so the behaviour can be asserted
+    /// without standing up a router.
+    fn raw_suffix(raw: &str, id: &str) -> String {
+        let prefix = format!("/facet/{id}");
+        raw.strip_prefix(&prefix)
+            .map(|rest| rest.trim_start_matches('/'))
+            .unwrap_or("")
+            .to_string()
+    }
+
+    #[test]
+    fn an_encoded_slash_survives_the_proxy() {
+        // The bug that made ComfyUI's workflow list inert: %2F decoded to a
+        // real slash turns one path segment into two, and the app 404s.
+        assert_eq!(
+            raw_suffix("/facet/comfyui/api/userdata/workflows%2FName.json", "comfyui"),
+            "api/userdata/workflows%2FName.json"
+        );
+    }
+
+    #[test]
+    fn encoded_spaces_and_plus_survive() {
+        // These decode to characters that make the forwarded URI invalid.
+        assert_eq!(
+            raw_suffix("/facet/app/a%20b%2Bc.json", "app"),
+            "a%20b%2Bc.json"
+        );
+    }
+
+    #[test]
+    fn the_bare_and_trailing_slash_forms_both_yield_an_empty_path() {
+        assert_eq!(raw_suffix("/facet/app", "app"), "");
+        assert_eq!(raw_suffix("/facet/app/", "app"), "");
+    }
+
+    #[test]
+    fn nested_paths_keep_their_structure() {
+        assert_eq!(
+            raw_suffix("/facet/app/vendor/bootstrap/css/bootstrap.css", "app"),
+            "vendor/bootstrap/css/bootstrap.css"
+        );
     }
 
     #[test]
