@@ -14,18 +14,37 @@ mod action;
 mod api;
 mod bind;
 mod monitor;
+mod enrol;
 mod files_api;
 mod rescue;
 mod term_api;
 mod ui;
 
 use anyhow::Context as _;
-use prism_core::auth::{AuthPolicy, Authenticator, session::SessionKey, totp};
+use prism_core::auth::{AuthPolicy, Authenticator, session::SessionKey};
 use prism_core::config::{self, HostConfig, Profile};
 use std::sync::{Arc, RwLock};
 use tracing::{info, warn};
 
 fn main() -> anyhow::Result<()> {
+    // Subcommands run and exit; only the bare invocation starts the daemon.
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    match args.first().map(String::as_str) {
+        Some("enrol") | Some("enroll") => {
+            let reset = args.iter().any(|a| a == "--reset");
+            return enrol::command(&config::state_dir(), reset);
+        }
+        Some("--help") | Some("-h") => {
+            println!("prismd — the Prism daemon\n");
+            println!("  prismd                 run the daemon");
+            println!("  prismd enrol           show enrolment status");
+            println!("  prismd enrol --reset   revoke and replace the authenticator secret");
+            return Ok(());
+        }
+        Some(other) => anyhow::bail!("unknown command `{other}`; try --help"),
+        None => {}
+    }
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_env("PRISM_LOG")
@@ -50,7 +69,7 @@ fn main() -> anyhow::Result<()> {
 
     lock_memory();
 
-    let secret = load_or_enrol_secret(&state_dir)?;
+    let secret = enrol::load_or_enrol(&state_dir)?;
     let session_key = SessionKey::load_or_create(&state_dir.join("session.key"))
         .context("loading session key")?;
     let auth = Arc::new(Authenticator::new(
@@ -150,67 +169,6 @@ async fn serve(
 async fn shutdown_signal() {
     let _ = tokio::signal::ctrl_c().await;
     info!("shutdown requested");
-}
-
-/// Load the TOTP secret, enrolling on first run.
-///
-/// Enrolment prints the provisioning URI to the log once. There is no way to
-/// retrieve it later by design — a running daemon that will re-display its own
-/// second factor on request is not a second factor. Losing it means deleting the
-/// file and enrolling again, which is the correct recovery.
-fn load_or_enrol_secret(state_dir: &std::path::Path) -> anyhow::Result<Vec<u8>> {
-    use std::io::{Read, Write};
-    use std::os::unix::fs::OpenOptionsExt;
-
-    let path = state_dir.join("totp.secret");
-    if let Ok(mut file) = std::fs::File::open(&path) {
-        let mut secret = Vec::new();
-        file.read_to_end(&mut secret)?;
-        if secret.len() == totp::SECRET_LEN {
-            return Ok(secret);
-        }
-        warn!(
-            path = %path.display(),
-            "totp secret is the wrong length; re-enrolling"
-        );
-    }
-
-    let secret = totp::generate_secret().context("reading /dev/urandom")?;
-    std::fs::create_dir_all(state_dir)?;
-    std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(&path)?
-        .write_all(&secret)?;
-
-    let account = format!(
-        "{}@{}",
-        std::env::var("USER").unwrap_or_else(|_| "prism".into()),
-        hostname()
-    );
-    let uri = totp::provisioning_uri(&secret, "Prism", &account);
-
-    info!("");
-    info!("──────────────── PRISM ENROLMENT ────────────────");
-    info!("Add this to Google or Microsoft Authenticator.");
-    info!("");
-    info!("  secret : {}", totp::base32_encode(&secret));
-    info!("  uri    : {uri}");
-    info!("");
-    info!("Shown once only. To re-enrol, delete:");
-    info!("  {}", path.display());
-    info!("─────────────────────────────────────────────────");
-    info!("");
-
-    Ok(secret.to_vec())
-}
-
-fn hostname() -> String {
-    std::fs::read_to_string("/proc/sys/kernel/hostname")
-        .map(|s| s.trim().to_string())
-        .unwrap_or_else(|_| "localhost".into())
 }
 
 /// Pin the daemon's pages so it cannot be swapped out.
