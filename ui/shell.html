@@ -523,7 +523,60 @@ body {
 .pkhead { display: flex; align-items: baseline; gap: 10px; }
 .pkt { font-size: 10.5px; letter-spacing: .2em; text-transform: uppercase; color: var(--ink-dim); }
 .pkc { font-size: 10.5px; color: var(--ink-ghost); margin-left: auto; }
-.pkl { flex: 1; overflow-y: auto; min-height: 0; }
+.pk.wide { width: min(880px, 94vw); height: min(600px, 88vh); }
+.pkcols { flex: 1; display: flex; gap: 10px; min-height: 0; }
+.pkl { flex: 1; overflow-y: auto; min-height: 0; outline: none; }
+.pkl:focus-visible { box-shadow: inset 0 0 0 1px var(--line-hi); border-radius: 4px; }
+.pkprev {
+  width: 300px; flex: none; border: 1px solid var(--line); border-radius: 6px;
+  background: rgba(0,0,0,.28); display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 8px; padding: 9px;
+  overflow: hidden; min-height: 0;
+}
+/* Letterboxed rather than cropped: the point is to recognise the file, and a
+   fill crop hides exactly the edges that distinguish similar images. */
+.pkprev img, .pkprev video { max-width: 100%; max-height: 100%; object-fit: contain; min-height: 0; }
+.pkprev .ph { color: var(--ink-ghost); font-size: 22px; }
+.pkprev .pcap {
+  flex: none; font-size: 10.5px; color: var(--ink-ghost); text-align: center;
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Filter and sort controls above a listing. */
+.listbar { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.listbar.sub { padding: 0 0 7px; border-bottom: 1px solid var(--line); margin-bottom: 7px; }
+.fcols { display: flex; gap: 9px; flex: 1; min-height: 0; }
+.fcols .flist { flex: 1; min-width: 0; outline: none; }
+.fcols .flist:focus-visible { box-shadow: inset 0 0 0 1px var(--line-hi); border-radius: 4px; }
+.fprev {
+  width: 232px; flex: none; border: 1px solid var(--line); border-radius: 6px;
+  background: rgba(0,0,0,.28); display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 7px; padding: 8px;
+  overflow: hidden; min-height: 0;
+}
+.fprev[hidden] { display: none; }
+.fprev img, .fprev video { max-width: 100%; max-height: 100%; object-fit: contain; min-height: 0; }
+.listbar .fsearch { flex: 1; min-width: 110px; }
+.kinds { display: flex; gap: 3px; }
+.kchip {
+  font: inherit; font-size: 10px; letter-spacing: .09em; text-transform: uppercase;
+  padding: 3px 7px; border-radius: 3px; cursor: pointer; color: var(--ink-ghost);
+  background: transparent; border: 1px solid transparent;
+}
+.kchip:hover { color: var(--ink-dim); }
+.kchip.on { color: var(--ink); border-color: var(--line-hi); background: rgba(255,255,255,.05); }
+.sortsel, .rootsel {
+  font: inherit; font-size: 11px; padding: 3px 5px; border-radius: 3px;
+  background: var(--base); color: var(--ink-dim); border: 1px solid var(--line-hi);
+  outline: none;
+}
+.dirbtn { padding: 3px 8px; }
+/* Keyboard cursor, distinct from selection: one is where you are, the other
+   is what you have chosen, and conflating them makes multi-select unreadable. */
+.f.cursor { background: rgba(255,255,255,.055); box-shadow: inset 2px 0 0 var(--ink-faint); }
+.f.sel { background: rgba(74,222,128,.10); box-shadow: inset 2px 0 0 var(--green); }
+.f.cursor.sel { background: rgba(74,222,128,.16); }
 .pkfoot { display: flex; align-items: center; gap: 8px; }
 .pksel { font-size: 11px; color: var(--ink-ghost); margin-right: auto; }
 .pkok:disabled { opacity: .4; cursor: default; }
@@ -1143,6 +1196,137 @@ function toast(msg, kind = 'ok') {
   }, kind === 'bad' ? 5200 : 2800);
 }
 
+/* Shared list behaviour for Files and the picker.
+   Both are lists of the same entries answering the same questions, and a
+   keyboard that works in one and not the other is worse than neither. Given a
+   container and the entries it is currently showing, this provides arrow keys,
+   Home/End, page movement, Enter to open, and type-ahead.
+
+   Type-ahead is the one worth explaining: typing consecutive letters builds a
+   prefix and jumps to the first entry that starts with it, the way a file
+   manager or a shell completion does — `co` finds ComfyUI where `c` then `o`
+   as two separate jumps would land on the first `o`. The buffer clears after a
+   second of silence, so the next `c` starts again. */
+function wireList(el, api) {
+  let buffer = '';
+  let bufferAt = 0;
+
+  const rows = () => [...el.querySelectorAll('[data-idx]')];
+  const cur = () => {
+    const r = el.querySelector('[data-idx].cursor');
+    return r ? Number(r.dataset.idx) : -1;
+  };
+
+  function move(to) {
+    const list = rows();
+    if (!list.length) return;
+    const i = Math.max(0, Math.min(list.length - 1, to));
+    list.forEach(r => r.classList.remove('cursor'));
+    const row = list[i];
+    row.classList.add('cursor');
+    row.scrollIntoView({ block: 'nearest' });
+    api.onCursor && api.onCursor(Number(row.dataset.idx), row);
+  }
+
+  el.addEventListener('keydown', e => {
+    const list = rows();
+    if (!list.length) return;
+    const at = Math.max(0, cur());
+    const page = Math.max(1, Math.floor(el.clientHeight / 26) - 1);
+
+    switch (e.key) {
+      case 'ArrowDown': e.preventDefault(); return move(at + 1);
+      case 'ArrowUp':   e.preventDefault(); return move(at - 1);
+      case 'PageDown':  e.preventDefault(); return move(at + page);
+      case 'PageUp':    e.preventDefault(); return move(at - page);
+      case 'Home':      e.preventDefault(); return move(0);
+      case 'End':       e.preventDefault(); return move(list.length - 1);
+      case 'Enter':
+        e.preventDefault();
+        return api.onOpen && api.onOpen(at);
+      case 'Backspace':
+        if (buffer) { e.preventDefault(); buffer = buffer.slice(0, -1); }
+        return;
+    }
+
+    // A single printable character, with no modifier: type-ahead. Anything
+    // else belongs to the app, not to this.
+    if (e.key.length !== 1 || e.ctrlKey || e.metaKey || e.altKey) return;
+    const now = Date.now();
+    buffer = (now - bufferAt < 1000 ? buffer : '') + e.key.toLowerCase();
+    bufferAt = now;
+
+    const names = api.names();
+    // Search from the current position when repeating the same letter, so
+    // pressing `c` repeatedly cycles through everything starting with c.
+    const repeat = buffer.length > 1 && [...buffer].every(c => c === buffer[0]);
+    const needle = repeat ? buffer[0] : buffer;
+    const start = repeat ? at + 1 : 0;
+    for (let n = 0; n < names.length; n++) {
+      const i = (start + n) % names.length;
+      if (names[i].toLowerCase().startsWith(needle)) {
+        e.preventDefault();
+        return move(i);
+      }
+    }
+  });
+
+  return { move, cursor: cur };
+}
+
+/* Match a file against an `accept` attribute.
+   Three forms appear in the wild and all three must work: `.png` is a
+   suffix, `image/*` is a whole kind, and `image/jpeg` is a specific type —
+   which is what ComfyUI sends. Treating that last one as a suffix, as this
+   first did, matched nothing at all and left the picker showing directories
+   and no files. */
+function acceptMatches(entry, accept) {
+  const wanted = String(accept || '').split(',').map(a => a.trim().toLowerCase()).filter(Boolean);
+  if (!wanted.length) return true;
+  const name = entry.name.toLowerCase();
+  return wanted.some(a => {
+    if (a.includes('/')) return entry.kind === a.split('/')[0];
+    return name.endsWith(a.startsWith('.') ? a : '.' + a.replace(/^\*\.?/, ''));
+  });
+}
+
+/* Sorting shared by both lists. Directories always lead: they are how you
+   move, not what you pick, and mixing them into a size order buries them. */
+const SORTS = {
+  name:     (a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }),
+  size:     (a, b) => (a.size || 0) - (b.size || 0),
+  modified: (a, b) => (a.modified || 0) - (b.modified || 0)
+};
+
+/* Every comparator above is ascending, so the arrow means one thing. What
+   changes with the key is the *useful* starting direction: A to Z, but largest
+   and most recent first, because nobody opens a folder looking for its
+   smallest file. */
+const SORT_DESC_BY_DEFAULT = key => key !== 'name';
+
+function sortEntries(entries, key, desc) {
+  const cmp = SORTS[key] || SORTS.name;
+  return [...entries].sort((a, b) => {
+    if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1;
+    const r = cmp(a, b);
+    return desc ? -r : r;
+  });
+}
+
+/* Kind filters offered above a listing. `all` is not a kind, it is the
+   absence of one, so it is not in the map. */
+const KIND_FILTERS = [
+  ['all', 'All'], ['image', 'Images'], ['video', 'Video'],
+  ['audio', 'Audio'], ['text', 'Text'], ['other', 'Other']
+];
+
+function kindAllowed(entry, filter) {
+  if (filter === 'all') return true;
+  if (entry.is_dir) return true;          // always a way out of the folder
+  if (filter === 'other') return !['image', 'video', 'audio', 'text'].includes(entry.kind);
+  return entry.kind === filter;
+}
+
 const FICON = { dir:'▸', image:'▤', video:'▶', audio:'♪', text:'≡', pdf:'▦', archive:'▣', other:'◆' };
 const fmtSize = b => {
   if (b === null || b === undefined) return '—';
@@ -1157,13 +1341,52 @@ function appFiles(startRoot, startPath = '') {
       <input class="fsearch" type="search" placeholder="Filter…" spellcheck="false">
       <span class="ftools"></span>
     </div>
+    <div class="listbar sub">
+      <span class="kinds"></span>
+      <select class="sortsel">
+        <option value="name">Name</option>
+        <option value="modified">Modified</option>
+        <option value="size">Size</option>
+      </select>
+      <button class="btn dirbtn" title="Reverse order">↑</button>
+    </div>
     <div class="crumb"></div>
-    <div class="flist"></div>`);
+    <div class="fcols">
+      <div class="flist" tabindex="0"></div>
+      <div class="fprev" hidden></div>
+    </div>`);
   let root = startRoot || (ROOTS[0] && ROOTS[0].name) || '';
   let path = startPath;
   let entries = [];        // the last listing, unfiltered
+  let shown = [];          // what is on screen, after filter and sort
   let writable = false;
   let filter = '';
+  let kind = 'all', sortKey = 'name', desc = false;
+
+  const kinds = d.querySelector('.kinds');
+  const sortSel = d.querySelector('.sortsel');
+  const dirBtn = d.querySelector('.dirbtn');
+  const prevPane = d.querySelector('.fprev');
+
+  for (const [k, label] of KIND_FILTERS) {
+    const b = document.createElement('button');
+    b.className = 'kchip' + (k === 'all' ? ' on' : '');
+    b.dataset.k = k;
+    b.textContent = label;
+    b.onclick = () => {
+      kind = k;
+      kinds.querySelectorAll('.kchip').forEach(x => x.classList.toggle('on', x.dataset.k === k));
+      paint();
+    };
+    kinds.append(b);
+  }
+  sortSel.onchange = () => {
+    sortKey = sortSel.value;
+    desc = SORT_DESC_BY_DEFAULT(sortKey);
+    dirBtn.textContent = desc ? '\u2193' : '\u2191';
+    paint();
+  };
+  dirBtn.onclick = () => { desc = !desc; dirBtn.textContent = desc ? '↓' : '↑'; paint(); };
 
   const search = d.querySelector('.fsearch');
   // Filters the current directory rather than searching the tree: instant, no
@@ -1176,13 +1399,46 @@ function appFiles(startRoot, startPath = '') {
     if (e.key === 'Escape') { search.value = ''; filter = ''; paint(); }
     // Enter opens the only match, so filter-then-Enter walks a deep tree fast.
     if (e.key === 'Enter') {
-      const shown = visible();
-      if (shown.length === 1) open(shown[0]);
+      const list = visible();
+      if (list.length === 1) open(list[0]);
+    }
+    // Arrows hand over to the list, so filtering and choosing are one gesture.
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const listEl = d.querySelector('.flist');
+      listEl.focus();
+      listEl.dispatchEvent(new KeyboardEvent('keydown', { key: e.key }));
     }
     e.stopPropagation();
   });
 
-  const visible = () => entries.filter(e => !filter || e.name.toLowerCase().includes(filter));
+  const visible = () => sortEntries(
+    entries.filter(e =>
+      (!filter || e.name.toLowerCase().includes(filter)) && kindAllowed(e, kind)),
+    sortKey, desc);
+
+  /* The preview follows the cursor, so arrowing through a directory is also
+     how you look through it. Shown only when there is something to show —
+     a column of "no preview" would cost half the window for nothing. */
+  function preview(e) {
+    if (!e || e.is_dir || !['image', 'video'].includes(e.kind)) {
+      prevPane.hidden = true;
+      prevPane.innerHTML = '';
+      return;
+    }
+    const full = path ? `${path}/${e.name}` : e.name;
+    const src = `/api/files/raw?root=${encodeURIComponent(root)}&path=${encodeURIComponent(full)}`;
+    prevPane.hidden = false;
+    prevPane.innerHTML = '';
+    const media = document.createElement(e.kind === 'image' ? 'img' : 'video');
+    media.src = src;
+    if (e.kind === 'video') { media.controls = true; media.preload = 'metadata'; }
+    else media.alt = e.name;
+    const cap = document.createElement('div');
+    cap.className = 'pcap';
+    cap.textContent = `${e.name} · ${fmtSize(e.size)}`;
+    prevPane.append(media, cap);
+  }
 
   const rel = name => (path ? `${path}/${name}` : name);
 
@@ -1258,30 +1514,40 @@ function appFiles(startRoot, startPath = '') {
   function paint() {
     const list = d.querySelector('.flist');
     list.innerHTML = '';
-    const shown = visible();
+    shown = visible();
 
     if (!shown.length) {
       const m = document.createElement('div');
       m.className = 'empty';
       m.textContent = filter ? `nothing matching "${filter}"` : 'empty directory';
       list.append(m);
+      preview(null);
       return;
     }
 
-    for (const e of shown) {
+    shown.forEach((e, i) => {
       const row = document.createElement('div');
       row.className = 'f' + (e.is_dir ? ' dir' : '');
+      row.dataset.idx = i;
       row.innerHTML = `<span class="ic">${FICON[e.kind] || '\u25c6'}</span><span class="nm"></span><span class="sz">${e.is_dir ? '\u2014' : fmtSize(e.size)}</span>`;
       row.querySelector('.nm').textContent = e.name + (e.is_link ? ' \u2192' : '');
       row.onclick = () => {
         list.querySelectorAll('.f').forEach(f => f.classList.remove('sel'));
         row.classList.add('sel');
+        keys.move(i);
       };
       row.ondblclick = () => open(e);
       row.oncontextmenu = ev => contextMenu(ev, e);
       list.append(row);
-    }
+    });
+    keys.move(Math.min(Math.max(0, keys.cursor()), shown.length - 1));
   }
+
+  const keys = wireList(d.querySelector('.flist'), {
+    names: () => shown.map(e => e.name),
+    onOpen: i => shown[i] && open(shown[i]),
+    onCursor: i => preview(shown[i])
+  });
 
   function toolbar() {
     const tools = d.querySelector('.ftools');
@@ -2152,14 +2418,26 @@ function pickFiles({ multiple = false, accept = '' } = {}) {
   return new Promise(resolve => {
     const wrap = document.createElement('div');
     wrap.className = 'picker';
-    wrap.innerHTML = `<div class="pk">
+    wrap.innerHTML = `<div class="pk wide">
         <div class="pkhead">
           <span class="pkt">Choose from this machine</span>
           <span class="pkc"></span>
         </div>
         <div class="crumb"></div>
-        <input class="fsearch pks" type="search" placeholder="Filter…" spellcheck="false">
-        <div class="flist pkl"></div>
+        <div class="listbar">
+          <input class="fsearch pks" type="search" placeholder="Filter…" spellcheck="false">
+          <span class="kinds"></span>
+          <select class="sortsel">
+            <option value="name">Name</option>
+            <option value="modified">Modified</option>
+            <option value="size">Size</option>
+          </select>
+          <button class="btn dirbtn" title="Reverse order">↑</button>
+        </div>
+        <div class="pkcols">
+          <div class="flist pkl" tabindex="0"></div>
+          <div class="pkprev"><div class="ph">select a file</div></div>
+        </div>
         <div class="pkfoot">
           <span class="pksel"></span>
           <button class="btn pkcancel">Cancel</button>
@@ -2171,20 +2449,40 @@ function pickFiles({ multiple = false, accept = '' } = {}) {
     const list = wrap.querySelector('.pkl');
     const crumb = wrap.querySelector('.crumb');
     const search = wrap.querySelector('.pks');
+    const kinds = wrap.querySelector('.kinds');
+    const sortSel = wrap.querySelector('.sortsel');
+    const dirBtn = wrap.querySelector('.dirbtn');
+    const prev = wrap.querySelector('.pkprev');
     const selLabel = wrap.querySelector('.pksel');
+
     let root = lastBrowsed.root || (ROOTS[0] && ROOTS[0].name) || '';
     let path = lastBrowsed.path || '';
-    let entries = [], filter = '';
+    let entries = [], shown = [], filter = '';
+    let kind = 'all', sortKey = 'name', desc = false;
     const chosen = new Map();
 
-    // An `accept` of "image/*" or ".png,.jpg" should narrow what is offered,
-    // or the picker is noisier than the one it replaced.
-    const wanted = accept.split(',').map(a => a.trim().toLowerCase()).filter(Boolean);
-    const matches = e => {
-      if (!wanted.length) return true;
-      const name = e.name.toLowerCase();
-      return wanted.some(a =>
-        a.endsWith('/*') ? e.kind === a.slice(0, -2) : name.endsWith(a.replace(/^\*/, '')));
+    for (const [k, label] of KIND_FILTERS) {
+      const b = document.createElement('button');
+      b.className = 'kchip' + (k === 'all' ? ' on' : '');
+      b.dataset.k = k;
+      b.textContent = label;
+      b.onclick = () => {
+        kind = k;
+        kinds.querySelectorAll('.kchip').forEach(x => x.classList.toggle('on', x.dataset.k === k));
+        paint();
+      };
+      kinds.append(b);
+    }
+    sortSel.onchange = () => {
+      sortKey = sortSel.value;
+      desc = SORT_DESC_BY_DEFAULT(sortKey);
+      dirBtn.textContent = desc ? '\u2193' : '\u2191';
+      paint();
+    };
+    dirBtn.onclick = () => {
+      desc = !desc;
+      dirBtn.textContent = desc ? '↓' : '↑';
+      paint();
     };
 
     function close(result) { wrap.remove(); resolve(result); }
@@ -2195,6 +2493,103 @@ function pickFiles({ multiple = false, accept = '' } = {}) {
         : (multiple ? 'select one or more' : 'select a file');
       wrap.querySelector('.pkok').disabled = chosen.size === 0;
     }
+
+    /* Whatever the cursor is on, shown as large as the panel allows.
+       Driven by the cursor rather than by ticking a checkbox, so walking a
+       directory with the arrow keys is also how you look through it. */
+    function preview(e) {
+      prev.innerHTML = '';
+      if (!e || e.is_dir) {
+        prev.innerHTML = `<div class="ph">${e ? 'folder' : 'select a file'}</div>`;
+        return;
+      }
+      const full = path ? `${path}/${e.name}` : e.name;
+      const src = `/api/files/raw?root=${encodeURIComponent(root)}&path=${encodeURIComponent(full)}`;
+      if (e.kind === 'image') {
+        const img = document.createElement('img');
+        img.src = src;
+        img.alt = e.name;
+        prev.append(img);
+      } else if (e.kind === 'video') {
+        const v = document.createElement('video');
+        v.src = src;
+        v.controls = true;
+        v.preload = 'metadata';
+        prev.append(v);
+      } else {
+        prev.innerHTML = `<div class="ph">${FICON[e.kind] || '\u25c6'}</div>`;
+      }
+      const cap = document.createElement('div');
+      cap.className = 'pcap';
+      cap.textContent = `${e.name} · ${fmtSize(e.size)}`;
+      prev.append(cap);
+    }
+
+    function paint() {
+      shown = sortEntries(
+        entries.filter(e =>
+          (!filter || e.name.toLowerCase().includes(filter)) &&
+          kindAllowed(e, kind) &&
+          (e.is_dir || acceptMatches(e, accept))),
+        sortKey, desc);
+
+      list.innerHTML = '';
+      if (!shown.length) {
+        list.innerHTML = '<div class="empty">nothing here</div>';
+        preview(null);
+        return;
+      }
+      shown.forEach((e, i) => {
+        const full = path ? `${path}/${e.name}` : e.name;
+        const row = document.createElement('div');
+        row.className = 'f' + (e.is_dir ? ' dir' : '') + (chosen.has(full) ? ' sel' : '');
+        row.dataset.idx = i;
+        row.innerHTML = `<span class="ic">${FICON[e.kind] || '\u25c6'}</span><span class="nm"></span><span class="sz">${e.is_dir ? '\u2014' : fmtSize(e.size)}</span>`;
+        row.querySelector('.nm').textContent = e.name;
+        row.onclick = () => { keys.move(i); toggle(i); };
+        row.ondblclick = () => open(i);
+        list.append(row);
+      });
+      keys.move(Math.min(Math.max(0, keys.cursor()), shown.length - 1));
+      paintSelection();
+    }
+
+    function toggle(i) {
+      const e = shown[i];
+      if (!e || e.is_dir) return;
+      const full = path ? `${path}/${e.name}` : e.name;
+      if (chosen.has(full)) chosen.delete(full);
+      else {
+        if (!multiple) chosen.clear();
+        chosen.set(full, { root, path: full, name: e.name });
+      }
+      list.querySelectorAll('.f').forEach((r, n) => {
+        const f = path ? `${path}/${shown[n].name}` : shown[n].name;
+        r.classList.toggle('sel', chosen.has(f));
+      });
+      paintSelection();
+    }
+
+    function open(i) {
+      const e = shown[i];
+      if (!e) return;
+      if (e.is_dir) {
+        path = path ? `${path}/${e.name}` : e.name;
+        search.value = ''; filter = '';
+        render();
+        return;
+      }
+      chosen.clear();
+      const full = path ? `${path}/${e.name}` : e.name;
+      chosen.set(full, { root, path: full, name: e.name });
+      close([...chosen.values()]);
+    }
+
+    const keys = wireList(list, {
+      names: () => shown.map(e => e.name),
+      onOpen: open,
+      onCursor: i => preview(shown[i])
+    });
 
     async function render() {
       list.innerHTML = '<div class="empty">loading…</div>';
@@ -2207,6 +2602,7 @@ function pickFiles({ multiple = false, accept = '' } = {}) {
       }
       path = data.path;
       entries = data.entries;
+      lastBrowsed.root = root; lastBrowsed.path = path;
 
       crumb.innerHTML = '';
       const sel = document.createElement('select');
@@ -2226,253 +2622,28 @@ function pickFiles({ multiple = false, accept = '' } = {}) {
         crumb.append(s2, a);
       });
 
-      list.innerHTML = '';
-      const shown = entries.filter(e =>
-        (!filter || e.name.toLowerCase().includes(filter)) && (e.is_dir || matches(e)));
-      if (!shown.length) {
-        list.innerHTML = '<div class="empty">nothing here</div>';
-        return;
-      }
-      for (const e of shown) {
-        const row = document.createElement('div');
-        const full = data.path ? `${data.path}/${e.name}` : e.name;
-        row.className = 'f' + (e.is_dir ? ' dir' : '') + (chosen.has(full) ? ' sel' : '');
-        row.innerHTML = `<span class="ic">${FICON[e.kind] || '\u25c6'}</span><span class="nm"></span><span class="sz">${e.is_dir ? '\u2014' : fmtSize(e.size)}</span>`;
-        row.querySelector('.nm').textContent = e.name;
-        row.onclick = () => {
-          if (e.is_dir) { path = full; search.value = ''; filter = ''; render(); return; }
-          if (chosen.has(full)) chosen.delete(full);
-          else {
-            if (!multiple) chosen.clear();
-            chosen.set(full, { root, path: full, name: e.name });
-          }
-          render();
-          paintSelection();
-        };
-        row.ondblclick = () => {
-          if (e.is_dir) return;
-          chosen.clear();
-          chosen.set(full, { root, path: full, name: e.name });
-          close([...chosen.values()]);
-        };
-        list.append(row);
-      }
-      paintSelection();
+      paint();
+      list.focus();
     }
 
-    search.oninput = () => { filter = search.value.trim().toLowerCase(); render(); };
+    search.oninput = () => { filter = search.value.trim().toLowerCase(); paint(); };
+    search.addEventListener('keydown', e => {
+      // Arrows from the search field drive the list, so filter-then-choose
+      // never needs the mouse.
+      if (['ArrowDown', 'ArrowUp', 'Enter'].includes(e.key)) {
+        e.preventDefault();
+        list.focus();
+        list.dispatchEvent(new KeyboardEvent('keydown', { key: e.key, bubbles: false }));
+      }
+      e.stopPropagation();
+    });
     wrap.querySelector('.pkcancel').onclick = () => close(null);
     wrap.querySelector('.pkok').onclick = () => close(chosen.size ? [...chosen.values()] : null);
     wrap.addEventListener('click', e => { if (e.target === wrap) close(null); });
     wrap.addEventListener('keydown', e => { if (e.key === 'Escape') close(null); });
 
     render();
-    setTimeout(() => search.focus(), 40);
   });
-}
-
-/* Make a proxied app's file picker browse the host, not this device.
-   `<input type="file">` always opens the *client's* picker — correct browser
-   behaviour, and the reason ComfyUI offers the laptop's filesystem when every
-   image worth loading is on the machine ComfyUI is running on.
-
-   The proxied document is served from /facet/<id>/, so it is same-origin with
-   the shell and its internals are reachable.
-
-   Three hooks, because there are three ways to open a file dialog and a page
-   may use any of them:
-
-     1. `input.click()` on an element that was never inserted into the
-        document. This is the common programmatic pattern and the reason the
-        first attempt here failed: a detached element's event path is the
-        element alone, so a document listener never sees it. Patching the
-        prototype is the only place that catches it.
-     2. `showOpenFilePicker()`, the File System Access API.
-     3. A real click on a visible input, which does reach the document.
-
-   The file travels host -> browser -> host, which is wasteful and deliberate.
-   Writing into the app's upload directory behind its back would desynchronise
-   whatever index it keeps; going through its own upload path means it stays
-   the authority on its own state. */
-function interceptFilePicker(iframe, facet) {
-  let win, doc;
-  try {
-    win = iframe.contentWindow;
-    doc = iframe.contentDocument;
-  } catch {
-    return; // Cross-origin after a redirect: nothing to do, and not an error.
-  }
-  if (!win || !doc || win.__prismPicker) return;
-  win.__prismPicker = true;
-
-  const name = facet && facet.name ? facet.name : 'the app';
-
-  /* Fetch the chosen paths from the host and present them as real File
-     objects, so the page cannot tell they did not come from a local disk. */
-  async function filesFor(picked) {
-    return Promise.all(picked.map(async p => {
-      const url = `/api/files/raw?root=${encodeURIComponent(p.root)}&path=${encodeURIComponent(p.path)}`;
-      const r = await fetch(url, { credentials: 'same-origin' });
-      if (!r.ok) throw new Error(`${p.name}: ${r.status}`);
-      const blob = await r.blob();
-      return new win.File([blob], p.name, {
-        type: blob.type || 'application/octet-stream',
-        lastModified: Date.now()
-      });
-    }));
-  }
-
-  /* Answer the app's request for a file.
-     `native` re-runs whatever the app originally called, so choosing "this
-     device" gives exactly the picker it would have had — the interception
-     steps aside rather than approximating the thing it replaced. */
-  async function fill(input, native) {
-    const source = await pickSource(name, SYSTEM.hostname, doc);
-    if (!source) return;                       // cancelled: the app gets nothing
-    if (source === 'local') {
-      // The flag makes the patched methods pass this one call straight
-      // through; cleared immediately so it cannot leak to the next.
-      input.dataset.prismBypass = '1';
-      try {
-        native && native();
-      } catch (e) {
-        // showPicker() requires transient user activation *in the frame that
-        // owns the input*, and the activation here belongs to the shell's
-        // document — the operator clicked a Prism button, not something inside
-        // the app. click() carries no such requirement, so it is the fallback
-        // that actually reaches the device's own picker.
-        try {
-          input.click();
-        } catch (e2) {
-          toast(`This device's file picker could not be opened — ${e2.message || e.message}`, 'bad');
-        }
-      } finally {
-        delete input.dataset.prismBypass;
-      }
-      return;
-    }
-
-    const picked = await pickFiles({
-      multiple: input.multiple,
-      accept: input.accept || ''
-    });
-    if (!picked || !picked.length) return;
-
-    let files;
-    try {
-      files = await filesFor(picked);
-    } catch (e) {
-      toast(`Could not read from host — ${e.message}`, 'bad');
-      return;
-    }
-
-    // DataTransfer is the only way to set input.files; assigning a FileList
-    // directly is not permitted. It must come from the frame's own realm, or
-    // the page's instanceof checks fail.
-    const dt = new win.DataTransfer();
-    for (const f of files) dt.items.add(f);
-    input.files = dt.files;
-
-    // Both events, because frameworks listen for different ones: Vue and React
-    // read input, most plain handlers read change.
-    input.dispatchEvent(new win.Event('input', { bubbles: true }));
-    input.dispatchEvent(new win.Event('change', { bubbles: true }));
-
-    toast(files.length === 1
-      ? `Sent ${files[0].name} to ${name}`
-      : `Sent ${files.length} files to ${name}`);
-  }
-
-  const proto = win.HTMLInputElement.prototype;
-
-  // 1. showPicker(), which is what a modern app actually calls. ComfyUI's own
-  //    helper reads `typeof el.showPicker === 'function' ? el.showPicker()
-  //    : el.click()`, so on Chrome the click path is never taken — patching
-  //    only click looked correct and intercepted nothing.
-  const nativeShowPicker = proto.showPicker;
-  if (typeof nativeShowPicker === 'function') {
-    proto.showPicker = function () {
-      if (this.type === 'file' && !this.dataset.prismBypass) {
-        fill(this, () => nativeShowPicker.call(this));
-        return;
-      }
-      return nativeShowPicker.apply(this, arguments);
-    };
-  }
-
-  // 2. Programmatic click, attached or not. A detached element's event path
-  //    is the element alone, so a document listener never sees this one.
-  const nativeClick = proto.click;
-  proto.click = function () {
-    if (this.type === 'file' && !this.dataset.prismBypass) {
-      fill(this, () => nativeClick.call(this));
-      return;
-    }
-    return nativeClick.apply(this, arguments);
-  };
-
-  // 3. File System Access API. The page expects handles rather than files, so
-  //    return the small part of that interface anyone actually calls.
-  if (typeof win.showOpenFilePicker === 'function') {
-    const nativeOpenPicker = win.showOpenFilePicker;
-    win.showOpenFilePicker = async (opts = {}) => {
-      const source = await pickSource(name, SYSTEM.hostname, doc);
-      if (!source) {
-        throw new win.DOMException('The user aborted a request.', 'AbortError');
-      }
-      if (source === 'local') return nativeOpenPicker.call(win, opts);
-
-      const accept = (opts.types || [])
-        .flatMap(t => Object.values(t.accept || {}).flat())
-        .join(',');
-      const picked = await pickFiles({ multiple: !!opts.multiple, accept });
-      // The API contract is to reject when the user cancels, not to resolve
-      // empty; resolving would read as a successful pick of nothing.
-      if (!picked || !picked.length) {
-        throw new win.DOMException('The user aborted a request.', 'AbortError');
-      }
-      const files = await filesFor(picked);
-      toast(`Sent ${files.length} file${files.length > 1 ? 's' : ''} to ${name}`);
-      return files.map(f => ({
-        kind: 'file',
-        name: f.name,
-        getFile: async () => f,
-        isSameEntry: async () => false
-      }));
-    };
-  }
-
-  // 4. A real click on an input that is in the document.
-  doc.addEventListener('click', ev => {
-    const input = ev.target;
-    if (!(input instanceof win.HTMLInputElement) || input.type !== 'file') return;
-    if (input.dataset.prismBypass) return;
-    ev.preventDefault();
-    ev.stopPropagation();
-    // A real click was swallowed, so the fallback is a synthetic one.
-    fill(input, () => nativeClick.call(input));
-  }, true);
-}
-
-/* Keep a proxied frame patched for as long as it exists.
-   A same-origin navigation replaces the frame's global object, taking the
-   patched prototypes with it. `load` covers the ordinary case, but a
-   single-page app that swaps documents without one — or a frame that is still
-   `about:blank` when load fires — would end up unpatched and silently fall
-   back to the client's file picker. Re-applying is idempotent and costs a
-   property read, so it is checked rather than assumed. */
-function keepPatched(iframe, facet) {
-  const tick = () => {
-    if (!iframe.isConnected) return false;
-    try {
-      const w = iframe.contentWindow;
-      if (w && !w.__prismPicker && iframe.contentDocument) {
-        interceptFilePicker(iframe, facet);
-      }
-    } catch { /* cross-origin: nothing to do, and not an error */ }
-    return true;
-  };
-  const timer = setInterval(() => { if (!tick()) clearInterval(timer); }, 1000);
 }
 
 /* Music: a directory is an album.
