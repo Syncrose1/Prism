@@ -25,6 +25,12 @@ futures-util = { version = "0.3", default-features = false }
 # The shell is embedded in the binary: one artefact to deploy, no build step,
 # and nothing to fetch at first paint. See ADR 0001.
 rust-embed = "8"
+# Proxying to locally-running apps. hyper directly rather than a client crate:
+# the requirement is to forward bytes and upgrade WebSockets untouched, not to
+# model requests.
+hyper = { version = "1", features = ["client", "http1"] }
+hyper-util = { version = "0.1", features = ["client", "client-legacy", "http1", "tokio"] }
+http-body-util = "0.1"
 # Streaming file bodies. Reading a 20 GB model into memory to serve it would be
 # a memory incident caused by the memory-incident daemon.
 tokio-util = { version = "0.7", features = ["io"] }

@@ -226,6 +226,14 @@ pub struct Facet {
     pub limits: FacetLimits,
     #[serde(default)]
     pub enabled_if: Gate,
+    /// Serve this workload's own web interface at `/facet/<id>/`.
+    ///
+    /// The reason Prism does not reimplement a media library or an image
+    /// generation UI: an application with its own domain model should be
+    /// adopted, not rebuilt. Files and Gallery stay native because they browse
+    /// the real filesystem against Prism's roots, which no third-party app does.
+    #[serde(default)]
+    pub expose: Option<Expose>,
     /// Run under a pseudo-terminal and surface it as a Terminal window.
     ///
     /// Needed by launchers that prompt — the operator's ComfyUI script asks for
@@ -234,6 +242,22 @@ pub struct Facet {
     /// limits, attribution and storm protection as a headless one. See ADR 0003 §3.
     #[serde(default)]
     pub pty: bool,
+}
+
+/// A locally-bound HTTP service to proxy.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Expose {
+    /// Port on loopback. Prism reaches it; nothing else can.
+    pub port: u16,
+    /// Shown in the launcher.
+    #[serde(default)]
+    pub title: Option<String>,
+    /// Some apps assume they own the document root and emit absolute URLs, which
+    /// a subpath cannot satisfy. Setting this opens the app on its own port in a
+    /// new tab instead of pretending the proxy is transparent.
+    #[serde(default)]
+    pub direct: bool,
 }
 
 /// Resource ceilings, all optional.

@@ -16,8 +16,8 @@
 //! nothing.
 
 use prism_core::config::{
-    BindMode, Facet, FacetLimits, FileRoot, FilesConfig, GovernorConfig, HostConfig, Profile,
-    ServerConfig, TerminalConfig,
+    BindMode, Expose, Facet, FacetLimits, FileRoot, FilesConfig, GovernorConfig, HostConfig,
+    Profile, ServerConfig, TerminalConfig,
 };
 use std::path::{Path, PathBuf};
 
@@ -112,6 +112,12 @@ fn detect_facets() -> Vec<Facet> {
                     swap_max: Some("6G".into()),
                 },
                 enabled_if: Default::default(),
+                // ComfyUI's own interface, served as a Prism window.
+                expose: Some(Expose {
+                    port: 8188,
+                    title: Some("ComfyUI".into()),
+                    direct: false,
+                }),
                 pty: interactive,
             });
             break;
@@ -136,6 +142,7 @@ fn detect_facets() -> Vec<Facet> {
                     swap_max: Some("4G".into()),
                 },
                 enabled_if: Default::default(),
+                expose: None,
                 pty: false,
             });
             break;
@@ -157,6 +164,7 @@ fn detect_facets() -> Vec<Facet> {
                 binary: Some("ollama".into()),
                 ..Default::default()
             },
+            expose: None,
             pty: false,
         });
     }

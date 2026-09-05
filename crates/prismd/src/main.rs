@@ -17,6 +17,7 @@ mod monitor;
 mod enrol;
 mod facets_api;
 mod files_api;
+mod proxy;
 mod rescue;
 mod setup;
 mod term_api;
@@ -122,6 +123,7 @@ fn main() -> anyhow::Result<()> {
     let facets = Arc::new(RwLock::new(profile.facet.clone()));
     let profile_path = Arc::new(dir.join("profile.toml"));
     let events = Arc::new(prism_core::events::EventLog::new());
+    let proxy_client = proxy::client();
     events.push(prism_core::events::Level::Info, "prism", "daemon started");
     let state_dir_arc = Arc::new(state_dir.clone());
     let terminals = Arc::new(prism_core::term::session::SessionManager::new(
@@ -178,7 +180,10 @@ fn main() -> anyhow::Result<()> {
         })
         .context("spawning monitor thread")?;
 
-    serve(host, auth, vitals, facets, terminals, roots, thumb_dir, profile_path, state_dir_arc, events)
+    serve(
+        host, auth, vitals, facets, terminals, roots, thumb_dir, profile_path, state_dir_arc,
+        events, proxy_client,
+    )
 }
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
@@ -193,6 +198,7 @@ async fn serve(
     profile_path: Arc<std::path::PathBuf>,
     state_dir: Arc<std::path::PathBuf>,
     events: Arc<prism_core::events::EventLog>,
+    proxy_client: proxy::ProxyClient,
 ) -> anyhow::Result<()> {
     let addr = bind::resolve(&host.server.bind, host.server.port)?;
     let listener = tokio::net::TcpListener::bind(addr)
@@ -210,6 +216,7 @@ async fn serve(
         profile_path,
         state_dir,
         events,
+        proxy: proxy_client,
     });
 
     axum::serve(listener, app)

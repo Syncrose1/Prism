@@ -74,10 +74,19 @@ struct FacetView {
     /// True when starting this facet opens a Terminal window rather than
     /// running headless.
     pty: bool,
+    /// Present when this workload has its own web interface Prism can serve.
+    expose: Option<ExposeView>,
     /// False when the facet's capability gate is unmet on this host — a profile
     /// authored elsewhere may name workloads that do not exist here.
     available: bool,
     unavailable_because: Option<String>,
+}
+
+#[derive(Serialize)]
+struct ExposeView {
+    port: u16,
+    title: String,
+    direct: bool,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -118,6 +127,11 @@ fn view(facet: &Facet, sup: &Supervisor) -> FacetView {
         swap_mib: running.then(|| sup.memory_swap_kb(&facet.id).map(|kb| kb / 1024)).flatten(),
         limits: LimitsView::from(&facet.limits),
         pty: facet.pty,
+        expose: facet.expose.as_ref().map(|e| ExposeView {
+            port: e.port,
+            title: e.title.clone().unwrap_or_else(|| facet.name.clone()),
+            direct: e.direct,
+        }),
         available: gate.is_satisfied(),
         unavailable_because: match gate {
             prism_core::gate::GateOutcome::Blocked(why) => Some(why),
@@ -151,6 +165,9 @@ struct CreateRequest {
     cwd: Option<String>,
     #[serde(default)]
     pty: bool,
+    /// A port this workload serves its own web interface on.
+    #[serde(default)]
+    expose: Option<u16>,
     #[serde(default)]
     limits: LimitsView,
 }
@@ -257,6 +274,11 @@ async fn create(
             swap_max: body.limits.swap_max,
         },
         enabled_if: Default::default(),
+        expose: body.expose.map(|port| prism_core::config::Expose {
+            port,
+            title: None,
+            direct: false,
+        }),
         pty: body.pty,
     };
 
@@ -443,6 +465,7 @@ mod tests {
             cwd: None,
             limits: FacetLimits::default(),
             enabled_if: Gate::default(),
+            expose: None,
             pty: false,
         }
     }

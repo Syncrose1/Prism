@@ -90,6 +90,7 @@ pub struct AppState {
     pub profile_path: Arc<std::path::PathBuf>,
     pub state_dir: Arc<std::path::PathBuf>,
     pub events: Arc<prism_core::events::EventLog>,
+    pub proxy: crate::proxy::ProxyClient,
     pub terminals: Arc<prism_core::term::session::SessionManager>,
     pub roots: Arc<Vec<prism_core::files::path::Root>>,
     pub thumb_dir: Arc<std::path::PathBuf>,
@@ -109,6 +110,7 @@ pub fn router(state: AppState) -> Router {
         .merge(crate::files_api::routes())
         .merge(crate::facets_api::routes())
         .merge(crate::workspace::routes())
+        .merge(crate::proxy::routes())
         .route("/", get(crate::ui::index))
         .route("/ui/{*path}", get(crate::ui::asset))
         .with_state(state)

@@ -243,6 +243,7 @@ mod tests {
             cwd: Some(PathBuf::from("/opt/comfy")),
             limits: FacetLimits::default(),
             enabled_if: Gate::default(),
+            expose: None,
             pty: false,
         }
     }
