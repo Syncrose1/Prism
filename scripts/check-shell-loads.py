@@ -20,6 +20,7 @@ import base64
 import http.server
 import json
 import os
+import re
 import secrets
 import shutil
 import socket
@@ -35,6 +36,12 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SHELL = os.path.join(ROOT, "ui")
 CDP_PORT = 9412
 HTTP_PORT = 8912
+
+
+def style_block(source):
+    """The main stylesheet's contents, opening tag matched to its own close."""
+    start = source.index("<style", 600)
+    return source[start:source.index("</style>", start)]
 
 
 def find_chromium():
@@ -113,6 +120,23 @@ def main():
         print("ui/shell.html not found", file=sys.stderr)
         return 1
 
+    source = open(os.path.join(SHELL, "shell.html"), encoding="utf-8").read()
+
+    # Cheap and decisive: a function definition can only live in script.
+    # The closing tag must be found *after* the opening one: the page has a
+    # small early <style>, so searching from the start finds a `</style>` that
+    # precedes the block and yields an empty slice that matches nothing. This
+    # check made exactly that mistake and passed while the bug was present.
+    style_src = style_block(source)
+    stray = re.findall(r"^\s*(?:function|const|let)\s+([A-Za-z_$][\w$]*)\s*[=(]",
+                       style_src, re.M)
+    if stray:
+        print("ui/shell.html: JavaScript inside <style>: "
+              + ", ".join(sorted(set(stray))[:8]), file=sys.stderr)
+        print("  it will never run, and it breaks the CSS around it",
+              file=sys.stderr)
+        return 1
+
     server = http.server.ThreadingHTTPServer(("127.0.0.1", HTTP_PORT), Quiet)
     threading.Thread(target=server.serve_forever, daemon=True).start()
 
@@ -163,6 +187,32 @@ def main():
         while time.time() < deadline:
             command("Runtime.evaluate", {"expression": "1", "returnByValue": True})
             time.sleep(0.4)
+
+        # Every class selector written in the stylesheet should survive
+        # parsing. A block of JavaScript pasted into <style> — which has
+        # happened, by anchoring an insertion on a comment that appears in both
+        # languages — is not a syntax error the browser reports: the CSS parser
+        # discards until it resynchronises, silently taking real rules with it,
+        # and the code never runs because it was never script. Comparing what
+        # was written against what parsed catches both halves at once.
+        written = set(re.findall(r"^\.([A-Za-z][\w-]*)", style_block(source), re.M))
+        parsed = command("Runtime.evaluate", {
+            "expression": (
+                "JSON.stringify([...new Set([...document.styleSheets]"
+                ".flatMap(s=>[...s.cssRules]).filter(r=>r.selectorText)"
+                ".flatMap(r=>r.selectorText.split(','))"
+                ".map(t=>(t.trim().match(/^\\.([\\w-]+)/)||[])[1])"
+                ".filter(Boolean))])"
+            ),
+            "returnByValue": True,
+        })["result"]["result"].get("value")
+        lost = sorted(written - set(json.loads(parsed or "[]")))
+        if lost:
+            print("ui/shell.html: CSS rules were written but not parsed: "
+                  + ", ".join("." + c for c in lost[:8]), file=sys.stderr)
+            print("  something before them is malformed — often script text "
+                  "inside <style>", file=sys.stderr)
+            return 1
 
         # An element carrying `hidden` that is still displayed. A UA rule
         # hides it at specificity (0,1,0), which any id selector setting

@@ -414,9 +414,14 @@ body {
   color: var(--ink-ghost); border: 1px solid var(--line-hi);
   border-radius: 4px; padding: 3px 6px;
 }
+.lchws { flex: none; padding: 12px 15px 13px; border-bottom: 1px solid var(--line); }
+.lchhead .hint {
+  letter-spacing: .1em; color: var(--ink-ghost); opacity: .65;
+  margin-left: 8px; text-transform: none;
+}
 .lchbody { display: flex; flex: 1; min-height: 0; }
 .lchside {
-  width: 244px; flex: none; border-right: 1px solid var(--line);
+  width: 186px; flex: none; border-right: 1px solid var(--line);
   padding: 13px; overflow-y: auto;
 }
 .lchapps { flex: 1; padding: 13px 15px; overflow-y: auto; min-width: 0; }
@@ -426,21 +431,31 @@ body {
 }
 .lchside .lchhead:not(:first-child) { margin-top: 17px; }
 
-.wsgrid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 5px; }
+.wsgrid { display: grid; grid-template-columns: repeat(10, 1fr); gap: 5px; }
 .wstile {
-  position: relative; aspect-ratio: 4/3; border-radius: 5px; cursor: pointer;
-  border: 1px solid var(--line); background: rgba(255,255,255,.022);
-  display: grid; place-items: center; font-size: 11px; color: var(--ink-ghost);
-  font-variant-numeric: tabular-nums; transition: background .12s ease, border-color .12s ease;
+  position: relative; aspect-ratio: 16/10; border-radius: 5px; cursor: pointer;
+  overflow: hidden; border: 1px solid var(--line);
+  background: rgba(255,255,255,.022); padding: 0;
+  transition: background .12s ease, border-color .12s ease;
 }
 .wstile:hover { background: rgba(255,255,255,.06); border-color: var(--line-hi); }
-.wstile.on { border-color: var(--green); color: var(--ink); background: rgba(74,222,128,.09); }
-/* Occupied but not current: a dot, so a glance finds where things are. */
-.wstile.used::after {
-  content: ''; position: absolute; bottom: 4px; left: 50%; transform: translateX(-50%);
-  width: 3px; height: 3px; border-radius: 50%; background: var(--ink-dim);
+.wstile.on { border-color: var(--green); background: rgba(74,222,128,.08); }
+/* The number sits behind the preview, so an empty workspace still reads as a
+   numbered place rather than an empty box. */
+.wstile .n {
+  position: absolute; inset: 0; display: grid; place-items: center;
+  font-size: 11px; color: var(--ink-ghost); font-variant-numeric: tabular-nums;
 }
-.wstile.on.used::after { background: var(--green); }
+.wstile.on .n { color: var(--ink-dim); }
+.wstile.used .n { opacity: .28; }
+/* Miniature of the windows actually on that workspace: the layout is the
+   thing being recognised, and a count would not tell them apart. */
+.wsmini { position: absolute; inset: 3px; }
+.wsmini i {
+  position: absolute; border: 1px solid var(--ink-ghost); border-radius: 1px;
+  background: rgba(255,255,255,.09); box-sizing: border-box;
+}
+.wstile.on .wsmini i { border-color: var(--green); background: rgba(74,222,128,.16); }
 
 .lchsys { display: flex; flex-direction: column; gap: 2px; }
 
@@ -617,210 +632,6 @@ body {
 .termbadge.live { color: var(--green); border-color: rgba(74,222,128,.4); }
 .termbadge.det  { color: var(--amber); border-color: rgba(251,191,36,.4); }
 
-/* Make a proxied app's file picker browse the host, not this device.
-   `<input type="file">` always opens the *client's* picker — correct browser
-   behaviour, and the reason ComfyUI offers the laptop's filesystem when every
-   image worth loading is on the machine ComfyUI is running on.
-
-   The proxied document is served from /facet/<id>/, so it is same-origin with
-   the shell and its internals are reachable.
-
-   Three hooks, because there are three ways to open a file dialog and a page
-   may use any of them:
-
-     1. `input.click()` on an element that was never inserted into the
-        document. This is the common programmatic pattern and the reason the
-        first attempt here failed: a detached element's event path is the
-        element alone, so a document listener never sees it. Patching the
-        prototype is the only place that catches it.
-     2. `showOpenFilePicker()`, the File System Access API.
-     3. A real click on a visible input, which does reach the document.
-
-   The file travels host -> browser -> host, which is wasteful and deliberate.
-   Writing into the app's upload directory behind its back would desynchronise
-   whatever index it keeps; going through its own upload path means it stays
-   the authority on its own state. */
-function interceptFilePicker(iframe, facet) {
-  let win, doc;
-  try {
-    win = iframe.contentWindow;
-    doc = iframe.contentDocument;
-  } catch {
-    return; // Cross-origin after a redirect: nothing to do, and not an error.
-  }
-  if (!win || !doc || win.__prismPicker) return;
-  win.__prismPicker = true;
-
-  const name = facet && facet.name ? facet.name : 'the app';
-
-  /* Fetch the chosen paths from the host and present them as real File
-     objects, so the page cannot tell they did not come from a local disk. */
-  async function filesFor(picked) {
-    return Promise.all(picked.map(async p => {
-      const url = `/api/files/raw?root=${encodeURIComponent(p.root)}&path=${encodeURIComponent(p.path)}`;
-      const r = await fetch(url, { credentials: 'same-origin' });
-      if (!r.ok) throw new Error(`${p.name}: ${r.status}`);
-      const blob = await r.blob();
-      return new win.File([blob], p.name, {
-        type: blob.type || 'application/octet-stream',
-        lastModified: Date.now()
-      });
-    }));
-  }
-
-  /* Answer the app's request for a file.
-     `native` re-runs whatever the app originally called, so choosing "this
-     device" gives exactly the picker it would have had — the interception
-     steps aside rather than approximating the thing it replaced. */
-  async function fill(input, native) {
-    const source = await pickSource(name, SYSTEM.hostname, doc);
-    if (!source) return;                       // cancelled: the app gets nothing
-    if (source === 'local') {
-      // The flag makes the patched methods pass this one call straight
-      // through; cleared immediately so it cannot leak to the next.
-      input.dataset.prismBypass = '1';
-      try {
-        native && native();
-      } catch (e) {
-        // showPicker() requires transient user activation *in the frame that
-        // owns the input*, and the activation here belongs to the shell's
-        // document — the operator clicked a Prism button, not something inside
-        // the app. click() carries no such requirement, so it is the fallback
-        // that actually reaches the device's own picker.
-        try {
-          input.click();
-        } catch (e2) {
-          toast(`This device's file picker could not be opened — ${e2.message || e.message}`, 'bad');
-        }
-      } finally {
-        delete input.dataset.prismBypass;
-      }
-      return;
-    }
-
-    const picked = await pickFiles({
-      multiple: input.multiple,
-      accept: input.accept || ''
-    });
-    if (!picked || !picked.length) return;
-
-    let files;
-    try {
-      files = await filesFor(picked);
-    } catch (e) {
-      toast(`Could not read from host — ${e.message}`, 'bad');
-      return;
-    }
-
-    // DataTransfer is the only way to set input.files; assigning a FileList
-    // directly is not permitted. It must come from the frame's own realm, or
-    // the page's instanceof checks fail.
-    const dt = new win.DataTransfer();
-    for (const f of files) dt.items.add(f);
-    input.files = dt.files;
-
-    // Both events, because frameworks listen for different ones: Vue and React
-    // read input, most plain handlers read change.
-    input.dispatchEvent(new win.Event('input', { bubbles: true }));
-    input.dispatchEvent(new win.Event('change', { bubbles: true }));
-
-    toast(files.length === 1
-      ? `Sent ${files[0].name} to ${name}`
-      : `Sent ${files.length} files to ${name}`);
-  }
-
-  const proto = win.HTMLInputElement.prototype;
-
-  // 1. showPicker(), which is what a modern app actually calls. ComfyUI's own
-  //    helper reads `typeof el.showPicker === 'function' ? el.showPicker()
-  //    : el.click()`, so on Chrome the click path is never taken — patching
-  //    only click looked correct and intercepted nothing.
-  const nativeShowPicker = proto.showPicker;
-  if (typeof nativeShowPicker === 'function') {
-    proto.showPicker = function () {
-      if (this.type === 'file' && !this.dataset.prismBypass) {
-        fill(this, () => nativeShowPicker.call(this));
-        return;
-      }
-      return nativeShowPicker.apply(this, arguments);
-    };
-  }
-
-  // 2. Programmatic click, attached or not. A detached element's event path
-  //    is the element alone, so a document listener never sees this one.
-  const nativeClick = proto.click;
-  proto.click = function () {
-    if (this.type === 'file' && !this.dataset.prismBypass) {
-      fill(this, () => nativeClick.call(this));
-      return;
-    }
-    return nativeClick.apply(this, arguments);
-  };
-
-  // 3. File System Access API. The page expects handles rather than files, so
-  //    return the small part of that interface anyone actually calls.
-  if (typeof win.showOpenFilePicker === 'function') {
-    const nativeOpenPicker = win.showOpenFilePicker;
-    win.showOpenFilePicker = async (opts = {}) => {
-      const source = await pickSource(name, SYSTEM.hostname, doc);
-      if (!source) {
-        throw new win.DOMException('The user aborted a request.', 'AbortError');
-      }
-      if (source === 'local') return nativeOpenPicker.call(win, opts);
-
-      const accept = (opts.types || [])
-        .flatMap(t => Object.values(t.accept || {}).flat())
-        .join(',');
-      const picked = await pickFiles({ multiple: !!opts.multiple, accept });
-      // The API contract is to reject when the user cancels, not to resolve
-      // empty; resolving would read as a successful pick of nothing.
-      if (!picked || !picked.length) {
-        throw new win.DOMException('The user aborted a request.', 'AbortError');
-      }
-      const files = await filesFor(picked);
-      toast(`Sent ${files.length} file${files.length > 1 ? 's' : ''} to ${name}`);
-      return files.map(f => ({
-        kind: 'file',
-        name: f.name,
-        getFile: async () => f,
-        isSameEntry: async () => false
-      }));
-    };
-  }
-
-  // 4. A real click on an input that is in the document.
-  doc.addEventListener('click', ev => {
-    const input = ev.target;
-    if (!(input instanceof win.HTMLInputElement) || input.type !== 'file') return;
-    if (input.dataset.prismBypass) return;
-    ev.preventDefault();
-    ev.stopPropagation();
-    // A real click was swallowed, so the fallback is a synthetic one.
-    fill(input, () => nativeClick.call(input));
-  }, true);
-}
-
-/* Keep a proxied frame patched for as long as it exists.
-   A same-origin navigation replaces the frame's global object, taking the
-   patched prototypes with it. `load` covers the ordinary case, but a
-   single-page app that swaps documents without one — or a frame that is still
-   `about:blank` when load fires — would end up unpatched and silently fall
-   back to the client's file picker. Re-applying is idempotent and costs a
-   property read, so it is checked rather than assumed. */
-function keepPatched(iframe, facet) {
-  const tick = () => {
-    if (!iframe.isConnected) return false;
-    try {
-      const w = iframe.contentWindow;
-      if (w && !w.__prismPicker && iframe.contentDocument) {
-        interceptFilePicker(iframe, facet);
-      }
-    } catch { /* cross-origin: nothing to do, and not an error */ }
-    return true;
-  };
-  const timer = setInterval(() => { if (!tick()) clearInterval(timer); }, 1000);
-}
-
 /* Facets */
 .facet { border: 1px solid var(--line); border-radius: var(--r); padding: 10px 11px; margin-bottom: 8px; background: var(--base); }
 .facet .top { display: flex; align-items: center; gap: 8px; margin-bottom: 9px; }
@@ -960,10 +771,12 @@ function keepPatched(iframe, facet) {
     <input id="lchInput" placeholder="Search apps" autocomplete="off" spellcheck="false">
     <kbd>Alt</kbd>
   </div>
+  <div class="lchws">
+    <div class="lchhead">Workspaces <span class="hint">Alt + number</span></div>
+    <div class="wsgrid" id="wsGrid"></div>
+  </div>
   <div class="lchbody">
     <div class="lchside">
-      <div class="lchhead">Workspaces</div>
-      <div class="wsgrid" id="wsGrid"></div>
       <div class="lchhead">System</div>
       <div class="lchsys" id="lchSys"></div>
     </div>
@@ -2458,6 +2271,210 @@ function pickFiles({ multiple = false, accept = '' } = {}) {
   });
 }
 
+/* Make a proxied app's file picker browse the host, not this device.
+   `<input type="file">` always opens the *client's* picker — correct browser
+   behaviour, and the reason ComfyUI offers the laptop's filesystem when every
+   image worth loading is on the machine ComfyUI is running on.
+
+   The proxied document is served from /facet/<id>/, so it is same-origin with
+   the shell and its internals are reachable.
+
+   Three hooks, because there are three ways to open a file dialog and a page
+   may use any of them:
+
+     1. `input.click()` on an element that was never inserted into the
+        document. This is the common programmatic pattern and the reason the
+        first attempt here failed: a detached element's event path is the
+        element alone, so a document listener never sees it. Patching the
+        prototype is the only place that catches it.
+     2. `showOpenFilePicker()`, the File System Access API.
+     3. A real click on a visible input, which does reach the document.
+
+   The file travels host -> browser -> host, which is wasteful and deliberate.
+   Writing into the app's upload directory behind its back would desynchronise
+   whatever index it keeps; going through its own upload path means it stays
+   the authority on its own state. */
+function interceptFilePicker(iframe, facet) {
+  let win, doc;
+  try {
+    win = iframe.contentWindow;
+    doc = iframe.contentDocument;
+  } catch {
+    return; // Cross-origin after a redirect: nothing to do, and not an error.
+  }
+  if (!win || !doc || win.__prismPicker) return;
+  win.__prismPicker = true;
+
+  const name = facet && facet.name ? facet.name : 'the app';
+
+  /* Fetch the chosen paths from the host and present them as real File
+     objects, so the page cannot tell they did not come from a local disk. */
+  async function filesFor(picked) {
+    return Promise.all(picked.map(async p => {
+      const url = `/api/files/raw?root=${encodeURIComponent(p.root)}&path=${encodeURIComponent(p.path)}`;
+      const r = await fetch(url, { credentials: 'same-origin' });
+      if (!r.ok) throw new Error(`${p.name}: ${r.status}`);
+      const blob = await r.blob();
+      return new win.File([blob], p.name, {
+        type: blob.type || 'application/octet-stream',
+        lastModified: Date.now()
+      });
+    }));
+  }
+
+  /* Answer the app's request for a file.
+     `native` re-runs whatever the app originally called, so choosing "this
+     device" gives exactly the picker it would have had — the interception
+     steps aside rather than approximating the thing it replaced. */
+  async function fill(input, native) {
+    const source = await pickSource(name, SYSTEM.hostname, doc);
+    if (!source) return;                       // cancelled: the app gets nothing
+    if (source === 'local') {
+      // The flag makes the patched methods pass this one call straight
+      // through; cleared immediately so it cannot leak to the next.
+      input.dataset.prismBypass = '1';
+      try {
+        native && native();
+      } catch (e) {
+        // showPicker() requires transient user activation *in the frame that
+        // owns the input*, and the activation here belongs to the shell's
+        // document — the operator clicked a Prism button, not something inside
+        // the app. click() carries no such requirement, so it is the fallback
+        // that actually reaches the device's own picker.
+        try {
+          input.click();
+        } catch (e2) {
+          toast(`This device's file picker could not be opened — ${e2.message || e.message}`, 'bad');
+        }
+      } finally {
+        delete input.dataset.prismBypass;
+      }
+      return;
+    }
+
+    const picked = await pickFiles({
+      multiple: input.multiple,
+      accept: input.accept || ''
+    });
+    if (!picked || !picked.length) return;
+
+    let files;
+    try {
+      files = await filesFor(picked);
+    } catch (e) {
+      toast(`Could not read from host — ${e.message}`, 'bad');
+      return;
+    }
+
+    // DataTransfer is the only way to set input.files; assigning a FileList
+    // directly is not permitted. It must come from the frame's own realm, or
+    // the page's instanceof checks fail.
+    const dt = new win.DataTransfer();
+    for (const f of files) dt.items.add(f);
+    input.files = dt.files;
+
+    // Both events, because frameworks listen for different ones: Vue and React
+    // read input, most plain handlers read change.
+    input.dispatchEvent(new win.Event('input', { bubbles: true }));
+    input.dispatchEvent(new win.Event('change', { bubbles: true }));
+
+    toast(files.length === 1
+      ? `Sent ${files[0].name} to ${name}`
+      : `Sent ${files.length} files to ${name}`);
+  }
+
+  const proto = win.HTMLInputElement.prototype;
+
+  // 1. showPicker(), which is what a modern app actually calls. ComfyUI's own
+  //    helper reads `typeof el.showPicker === 'function' ? el.showPicker()
+  //    : el.click()`, so on Chrome the click path is never taken — patching
+  //    only click looked correct and intercepted nothing.
+  const nativeShowPicker = proto.showPicker;
+  if (typeof nativeShowPicker === 'function') {
+    proto.showPicker = function () {
+      if (this.type === 'file' && !this.dataset.prismBypass) {
+        fill(this, () => nativeShowPicker.call(this));
+        return;
+      }
+      return nativeShowPicker.apply(this, arguments);
+    };
+  }
+
+  // 2. Programmatic click, attached or not. A detached element's event path
+  //    is the element alone, so a document listener never sees this one.
+  const nativeClick = proto.click;
+  proto.click = function () {
+    if (this.type === 'file' && !this.dataset.prismBypass) {
+      fill(this, () => nativeClick.call(this));
+      return;
+    }
+    return nativeClick.apply(this, arguments);
+  };
+
+  // 3. File System Access API. The page expects handles rather than files, so
+  //    return the small part of that interface anyone actually calls.
+  if (typeof win.showOpenFilePicker === 'function') {
+    const nativeOpenPicker = win.showOpenFilePicker;
+    win.showOpenFilePicker = async (opts = {}) => {
+      const source = await pickSource(name, SYSTEM.hostname, doc);
+      if (!source) {
+        throw new win.DOMException('The user aborted a request.', 'AbortError');
+      }
+      if (source === 'local') return nativeOpenPicker.call(win, opts);
+
+      const accept = (opts.types || [])
+        .flatMap(t => Object.values(t.accept || {}).flat())
+        .join(',');
+      const picked = await pickFiles({ multiple: !!opts.multiple, accept });
+      // The API contract is to reject when the user cancels, not to resolve
+      // empty; resolving would read as a successful pick of nothing.
+      if (!picked || !picked.length) {
+        throw new win.DOMException('The user aborted a request.', 'AbortError');
+      }
+      const files = await filesFor(picked);
+      toast(`Sent ${files.length} file${files.length > 1 ? 's' : ''} to ${name}`);
+      return files.map(f => ({
+        kind: 'file',
+        name: f.name,
+        getFile: async () => f,
+        isSameEntry: async () => false
+      }));
+    };
+  }
+
+  // 4. A real click on an input that is in the document.
+  doc.addEventListener('click', ev => {
+    const input = ev.target;
+    if (!(input instanceof win.HTMLInputElement) || input.type !== 'file') return;
+    if (input.dataset.prismBypass) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    // A real click was swallowed, so the fallback is a synthetic one.
+    fill(input, () => nativeClick.call(input));
+  }, true);
+}
+
+/* Keep a proxied frame patched for as long as it exists.
+   A same-origin navigation replaces the frame's global object, taking the
+   patched prototypes with it. `load` covers the ordinary case, but a
+   single-page app that swaps documents without one — or a frame that is still
+   `about:blank` when load fires — would end up unpatched and silently fall
+   back to the client's file picker. Re-applying is idempotent and costs a
+   property read, so it is checked rather than assumed. */
+function keepPatched(iframe, facet) {
+  const tick = () => {
+    if (!iframe.isConnected) return false;
+    try {
+      const w = iframe.contentWindow;
+      if (w && !w.__prismPicker && iframe.contentDocument) {
+        interceptFilePicker(iframe, facet);
+      }
+    } catch { /* cross-origin: nothing to do, and not an error */ }
+    return true;
+  };
+  const timer = setInterval(() => { if (!tick()) clearInterval(timer); }, 1000);
+}
+
 /* Music: a directory is an album.
    The same grouping idea as Gallery, because the operator's audio lives in
    folders rather than in a library with a database. Media Session is wired up
@@ -3038,11 +3055,38 @@ function closeLauncher() { lch.hidden = true; }
 
 function paintWorkspaces() {
   wsGrid.innerHTML = '';
+  const deskRect = desk.getBoundingClientRect();
   for (let n = 1; n <= WS_COUNT; n++) {
-    const count = [...wins.values()].filter(w => (w.ws || 1) === n).length;
+    const here = [...wins.values()].filter(w => (w.ws || 1) === n);
+    const count = here.length;
     const t = document.createElement('button');
     t.className = 'wstile' + (n === CURRENT_WS ? ' on' : '') + (count ? ' used' : '');
-    t.textContent = n === 10 ? '0' : String(n);
+    // Alt+0 reaches the tenth, the way a row of ten number keys is laid out.
+    t.innerHTML = `<span class="n">${n === 10 ? '0' : n}</span>`;
+
+    // A miniature of the real layout. Which workspace has which windows is the
+    // question being asked, and a count cannot answer it.
+    if (count && deskRect.width > 0) {
+      const mini = document.createElement('div');
+      mini.className = 'wsmini';
+      for (const w of here) {
+        if (w.el.classList.contains('min')) continue;
+        const r = document.createElement('i');
+        const max = w.el.classList.contains('max');
+        const pc = v => `${Math.max(0, Math.min(100, v))}%`;
+        if (max) {
+          r.style.cssText = 'left:0;top:0;width:100%;height:100%';
+        } else {
+          r.style.left = pc(parseInt(w.el.style.left) / deskRect.width * 100);
+          r.style.top = pc(parseInt(w.el.style.top) / deskRect.height * 100);
+          r.style.width = pc(parseInt(w.el.style.width) / deskRect.width * 100);
+          r.style.height = pc(parseInt(w.el.style.height) / deskRect.height * 100);
+        }
+        mini.append(r);
+      }
+      t.append(mini);
+    }
+
     t.title = count
       ? `${count} window${count > 1 ? 's' : ''} — shift-click to send the focused window here`
       : 'empty — shift-click to send the focused window here';
@@ -3136,6 +3180,27 @@ let altAlone = false;
 window.addEventListener('keydown', e => {
   if (e.key === 'Alt' && !e.repeat) { altAlone = true; return; }
   altAlone = false;
+
+  // Alt+1..9, Alt+0 for the tenth. Held with a digit, Alt is a modifier and
+  // must not also toggle the launcher — which the line above already ensures.
+  if (e.altKey && !e.ctrlKey && !e.metaKey && /^[0-9]$/.test(e.key)) {
+    e.preventDefault();
+    gotoWorkspace(e.key === '0' ? 10 : Number(e.key));
+    if (launcherOpen()) closeLauncher();
+    return;
+  }
+
+  // `/` reaches the search field, the way it does in a text editor or a code
+  // host. Never while typing: inside a field or a terminal it is just a
+  // slash, and stealing it there would be worse than not having it.
+  if (e.key === '/' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    const t = e.target;
+    const typing = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' ||
+                         t.isContentEditable);
+    if (typing) return;
+    e.preventDefault();
+    if (!launcherOpen()) openLauncher(); else lchInput.focus();
+  }
 }, true);
 window.addEventListener('mousedown', () => { altAlone = false; }, true);
 window.addEventListener('keyup', e => {
