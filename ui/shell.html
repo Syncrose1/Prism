@@ -924,7 +924,15 @@ function appFacets() {
 
   async function act(id, what, body) {
     try {
-      await API.post(`/api/facets/${encodeURIComponent(id)}/${what}`, body);
+      const r = await API.post(`/api/facets/${encodeURIComponent(id)}/${what}`, body);
+      // An interactive launcher hands back a session; open a window on it so
+      // its prompts can be answered.
+      if (r && r.pty && r.session) {
+        makeWindow({
+          app: 'terminal', title: 'Terminal', meta: r.session.title,
+          w: 620, h: 380, content: appTerminal(r.session.id)
+        });
+      }
     } catch (e) {
       // Refusals here are meaningful — degraded machine, unmet gate, already
       // running — so they are shown rather than swallowed.
@@ -998,7 +1006,7 @@ function appFacets() {
         acts.append(btn('Stop', '', () => act(f.id, 'stop')));
         acts.append(btn('Kill', 'danger', () => act(f.id, 'kill')));
       } else {
-        const start = btn('Start', '', () => act(f.id, 'start'));
+        const start = btn(f.pty ? 'Launch' : 'Start', '', () => act(f.id, 'start'));
         start.disabled = !f.available;
         if (!f.available) start.style.opacity = '.4';
         acts.append(start);

@@ -58,6 +58,9 @@ struct FacetView {
     memory_mib: Option<u64>,
     swap_mib: Option<u64>,
     limits: LimitsView,
+    /// True when starting this facet opens a Terminal window rather than
+    /// running headless.
+    pty: bool,
     /// False when the facet's capability gate is unmet on this host — a profile
     /// authored elsewhere may name workloads that do not exist here.
     available: bool,
@@ -101,6 +104,7 @@ fn view(facet: &Facet, sup: &Supervisor) -> FacetView {
         memory_mib: running.then(|| sup.memory_current_kb(&facet.id).map(|kb| kb / 1024)).flatten(),
         swap_mib: running.then(|| sup.memory_swap_kb(&facet.id).map(|kb| kb / 1024)).flatten(),
         limits: LimitsView::from(&facet.limits),
+        pty: facet.pty,
         available: gate.is_satisfied(),
         unavailable_because: match gate {
             prism_core::gate::GateOutcome::Blocked(why) => Some(why),
@@ -144,6 +148,30 @@ async fn start(
             "degraded",
             "the machine is under memory pressure; refusing to start a workload",
         );
+    }
+
+    // An interactive launcher becomes a terminal session rather than a headless
+    // scope, so its prompts can actually be answered. Same containment either
+    // way — a session is a scope too.
+    if facet.pty {
+        let title = facet.name.clone();
+        let cwd = facet.cwd.as_ref().map(|p| p.display().to_string());
+        return match state.terminals.create(
+            &facet.command,
+            cwd.as_deref(),
+            prism_core::term::pty::WinSize { rows: 30, cols: 100 },
+            &title,
+        ) {
+            Ok(session) => {
+                info!(facet = %id, session = %session.id, "facet started with a pty");
+                Json(serde_json::json!({
+                    "pty": true,
+                    "session": session.info(),
+                }))
+                .into_response()
+            }
+            Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, "start_failed", e.to_string()),
+        };
     }
 
     let sup = Supervisor::new();
@@ -240,6 +268,7 @@ mod tests {
             cwd: None,
             limits: FacetLimits::default(),
             enabled_if: Gate::default(),
+            pty: false,
         }
     }
 
@@ -281,6 +310,14 @@ mod tests {
         assert_eq!(v.memory_high.as_deref(), Some("22G"));
         assert_eq!(v.memory_max, None);
         assert_eq!(v.swap_max.as_deref(), Some("6G"));
+    }
+
+    #[test]
+    fn a_pty_facet_is_marked_as_such_so_the_ui_can_open_a_terminal() {
+        let mut f = facet("interactive");
+        f.pty = true;
+        assert!(view(&f, &Supervisor::new()).pty);
+        assert!(!view(&facet("headless"), &Supervisor::new()).pty);
     }
 
     #[test]

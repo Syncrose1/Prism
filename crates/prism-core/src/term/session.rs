@@ -352,8 +352,22 @@ impl SessionManager {
                 }
                 exited.store(true, Ordering::Relaxed);
                 *ended_at.lock().expect("ended_at poisoned") = Some(SystemTime::now());
-                if let Some(code) = pty.try_wait() {
-                    *exit_code.lock().expect("exit code poisoned") = Some(code);
+
+                // EOF on the master means the slave closed, which usually but
+                // not always means the child has already been reaped. Polling
+                // once here loses the exit code whenever the read wins the
+                // race — so retry briefly rather than reporting "exited, code
+                // unknown" for a command that plainly returned one.
+                let deadline = std::time::Instant::now() + Duration::from_secs(2);
+                loop {
+                    if let Some(code) = pty.try_wait() {
+                        *exit_code.lock().expect("exit code poisoned") = Some(code);
+                        break;
+                    }
+                    if std::time::Instant::now() >= deadline {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(20));
                 }
             })
             .map_err(SpawnError::Io)?;

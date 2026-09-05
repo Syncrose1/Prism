@@ -96,6 +96,15 @@ impl Supervisor {
     }
 
     pub fn start(&self, facet: &Facet) -> anyhow::Result<()> {
+        // An interactive facet has no terminal here, so its first prompt would
+        // block forever with nobody able to answer it. The caller must route it
+        // through the session manager instead.
+        if facet.pty {
+            anyhow::bail!(
+                "facet `{}` needs a pty; start it as a terminal session",
+                facet.id
+            );
+        }
         let argv = launch_argv(facet);
         let (program, args) = argv.split_first().expect("argv is never empty");
         let output = Command::new(program).args(args).output()?;
@@ -234,6 +243,7 @@ mod tests {
             cwd: Some(PathBuf::from("/opt/comfy")),
             limits: FacetLimits::default(),
             enabled_if: Gate::default(),
+            pty: false,
         }
     }
 
@@ -307,6 +317,15 @@ mod tests {
             .position(|a| a == "--property=MemoryMax=26G")
             .expect("limit present");
         assert!(prop < sep, "properties must precede the command");
+    }
+
+    #[test]
+    fn a_pty_facet_cannot_be_started_headlessly() {
+        // Running one without a terminal would hang on its first prompt.
+        let mut f = facet();
+        f.pty = true;
+        let e = Supervisor::new().start(&f).unwrap_err().to_string();
+        assert!(e.contains("needs a pty"), "got: {e}");
     }
 
     #[test]

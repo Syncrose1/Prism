@@ -226,6 +226,14 @@ pub struct Facet {
     pub limits: FacetLimits,
     #[serde(default)]
     pub enabled_if: Gate,
+    /// Run under a pseudo-terminal and surface it as a Terminal window.
+    ///
+    /// Needed by launchers that prompt — the operator's ComfyUI script asks for
+    /// Enter twice, and a pipe cannot answer a prompt. Setting this makes an
+    /// interactive workload a one-click launcher while still getting the same
+    /// limits, attribution and storm protection as a headless one. See ADR 0003 §3.
+    #[serde(default)]
+    pub pty: bool,
 }
 
 /// Resource ceilings, all optional.
