@@ -277,6 +277,7 @@ async fn create(
         expose: body.expose.map(|port| prism_core::config::Expose {
             port,
             title: None,
+            tls: false,
             direct: false,
         }),
         pty: body.pty,

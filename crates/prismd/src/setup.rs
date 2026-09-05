@@ -116,6 +116,7 @@ fn detect_facets() -> Vec<Facet> {
                 expose: Some(Expose {
                     port: 8188,
                     title: Some("ComfyUI".into()),
+                    tls: false,
                     direct: false,
                 }),
                 pty: interactive,

@@ -124,6 +124,8 @@ fn main() -> anyhow::Result<()> {
     let profile_path = Arc::new(dir.join("profile.toml"));
     let events = Arc::new(prism_core::events::EventLog::new());
     let proxy_client = proxy::client();
+    let proxy_tls_client = proxy::tls_client();
+    let tls_backends = Arc::new(RwLock::new(std::collections::HashSet::new()));
     events.push(prism_core::events::Level::Info, "prism", "daemon started");
     let state_dir_arc = Arc::new(state_dir.clone());
     let terminals = Arc::new(prism_core::term::session::SessionManager::new(
@@ -182,7 +184,7 @@ fn main() -> anyhow::Result<()> {
 
     serve(
         host, auth, vitals, facets, terminals, roots, thumb_dir, profile_path, state_dir_arc,
-        events, proxy_client,
+        events, proxy_client, proxy_tls_client, tls_backends,
     )
 }
 
@@ -199,6 +201,8 @@ async fn serve(
     state_dir: Arc<std::path::PathBuf>,
     events: Arc<prism_core::events::EventLog>,
     proxy_client: proxy::ProxyClient,
+    proxy_tls_client: proxy::TlsProxyClient,
+    tls_backends: Arc<RwLock<std::collections::HashSet<String>>>,
 ) -> anyhow::Result<()> {
     let addr = bind::resolve(&host.server.bind, host.server.port)?;
     let listener = tokio::net::TcpListener::bind(addr)
@@ -217,6 +221,8 @@ async fn serve(
         state_dir,
         events,
         proxy: proxy_client,
+        proxy_tls: proxy_tls_client,
+        tls_backends,
     });
 
     axum::serve(listener, app)

@@ -91,6 +91,10 @@ pub struct AppState {
     pub state_dir: Arc<std::path::PathBuf>,
     pub events: Arc<prism_core::events::EventLog>,
     pub proxy: crate::proxy::ProxyClient,
+    pub proxy_tls: crate::proxy::TlsProxyClient,
+    /// Facets discovered to require TLS, so the wasted plain attempt happens
+    /// once rather than on every request.
+    pub tls_backends: Arc<RwLock<std::collections::HashSet<String>>>,
     pub terminals: Arc<prism_core::term::session::SessionManager>,
     pub roots: Arc<Vec<prism_core::files::path::Root>>,
     pub thumb_dir: Arc<std::path::PathBuf>,

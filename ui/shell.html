@@ -311,6 +311,8 @@ body {
 .frameapp .direct { display: grid; place-items: center; height: 100%; gap: 12px; text-align: center; padding: 20px; }
 .frameapp .direct p { color: var(--ink-faint); font-size: 12px; margin: 0; max-width: 32ch; line-height: 1.6; }
 .frameapp .direct a { text-decoration: none; }
+.frameapp .direct .cav { color: var(--ink-ghost); font-size: 11px; max-width: 34ch; }
+.frameapp .direct code { color: var(--ink-faint); }
 
 /* Timeline */
 .tl { display: grid; gap: 1px; }
@@ -1503,11 +1505,16 @@ function appProxy(facet) {
   const host = d.firstElementChild;
 
   if (facet.expose.direct) {
-    // Declared as needing its own origin, so the honest thing is a link rather
-    // than a frame that would half-work.
+    // `direct` means the app cannot be framed. It only helps when the app is
+    // reachable from *this browser* — an app bound to loopback on the host is
+    // not, whatever address is offered, so say that rather than hand over a
+    // link that cannot work.
     host.innerHTML = `<div class="direct">
-        <p>${facet.name} needs to run at its own address.</p>
+        <p><b>${facet.name}</b> is configured to open at its own address.</p>
         <a class="btn" target="_blank" rel="noopener">Open ${facet.name}</a>
+        <p class="cav">This only works if it listens on more than loopback.
+          Otherwise remove <code>direct</code> from its config and let Prism
+          proxy it.</p>
       </div>`;
     const a = host.querySelector('a');
     a.href = `http://${location.hostname}:${facet.expose.port}/`;

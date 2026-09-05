@@ -253,9 +253,18 @@ pub struct Expose {
     /// Shown in the launcher.
     #[serde(default)]
     pub title: Option<String>,
-    /// Some apps assume they own the document root and emit absolute URLs, which
-    /// a subpath cannot satisfy. Setting this opens the app on its own port in a
-    /// new tab instead of pretending the proxy is transparent.
+    /// Speak TLS to the app.
+    ///
+    /// Some apps insist on HTTPS even on loopback and redirect plain requests
+    /// away — Syncthing does. Left unset, Prism tries HTTP and upgrades
+    /// automatically on seeing such a redirect, so this is rarely needed by
+    /// hand; setting it skips the wasted first attempt.
+    #[serde(default)]
+    pub tls: bool,
+    /// Some apps assume they own the document root and emit absolute URLs that
+    /// a subpath cannot satisfy. Setting this stops Prism pretending the proxy
+    /// is transparent — but note the app must be reachable from the browser,
+    /// which an app bound to loopback is not.
     #[serde(default)]
     pub direct: bool,
 }

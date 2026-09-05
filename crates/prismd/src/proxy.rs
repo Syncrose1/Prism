@@ -68,9 +68,78 @@ pub fn routes() -> Router<AppState> {
 }
 
 pub type ProxyClient = Client<HttpConnector, Body>;
+pub type TlsProxyClient =
+    Client<hyper_rustls::HttpsConnector<HttpConnector>, Body>;
 
 pub fn client() -> ProxyClient {
     Client::builder(TokioExecutor::new()).build(HttpConnector::new())
+}
+
+/// Accepts any certificate, and only ever connects to loopback.
+///
+/// This is not a weakened security boundary, because there was never one here
+/// to weaken. The connection is to 127.0.0.1 on the same host, so it cannot be
+/// intercepted by anything that is not already running as this user — at which
+/// point certificate validation is irrelevant. Apps in this position (Syncthing
+/// among them) present a self-signed certificate precisely because TLS on
+/// loopback is a formality they cannot skip.
+///
+/// The real boundary is Prism's own authentication and its tailnet binding.
+#[derive(Debug)]
+struct LoopbackTrust;
+
+impl rustls::client::danger::ServerCertVerifier for LoopbackTrust {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &rustls::pki_types::CertificateDer<'_>,
+        _intermediates: &[rustls::pki_types::CertificateDer<'_>],
+        _server_name: &rustls::pki_types::ServerName<'_>,
+        _ocsp: &[u8],
+        _now: rustls::pki_types::UnixTime,
+    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        Ok(rustls::client::danger::ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        _message: &[u8],
+        _cert: &rustls::pki_types::CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        _message: &[u8],
+        _cert: &rustls::pki_types::CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        rustls::crypto::ring::default_provider()
+            .signature_verification_algorithms
+            .supported_schemes()
+    }
+}
+
+pub fn tls_client() -> TlsProxyClient {
+    let config = rustls::ClientConfig::builder()
+        .dangerous()
+        .with_custom_certificate_verifier(std::sync::Arc::new(LoopbackTrust))
+        .with_no_client_auth();
+
+    let mut http = HttpConnector::new();
+    http.enforce_http(false);
+    let https = hyper_rustls::HttpsConnectorBuilder::new()
+        .with_tls_config(config)
+        .https_only()
+        .enable_http1()
+        .wrap_connector(http);
+
+    Client::builder(TokioExecutor::new()).build(https)
 }
 
 async fn forward_root(
@@ -107,26 +176,30 @@ async fn proxy(
         return denied;
     }
 
-    let Some(port) = state
+    let Some((port, prefer_tls)) = state
         .facets
         .read()
         .expect("facets poisoned")
         .iter()
         .find(|f| f.id == id)
-        .and_then(|f| f.expose.as_ref().map(|e| e.port))
+        .and_then(|f| f.expose.as_ref().map(|e| (e.port, e.tls)))
     else {
         return err(
             StatusCode::NOT_FOUND,
             format!("facet `{id}` does not expose a port"),
         );
     };
+    // An app that redirected us to HTTPS once will do so every time; remember
+    // it so only the first request pays for the discovery.
+    let use_tls = prefer_tls || state.tls_backends.read().expect("tls set poisoned").contains(&id);
 
     let query = req
         .uri()
         .query()
         .map(|q| format!("?{q}"))
         .unwrap_or_default();
-    let target: Uri = match format!("http://127.0.0.1:{port}/{path}{query}").parse() {
+    let scheme = if use_tls { "https" } else { "http" };
+    let target: Uri = match format!("{scheme}://127.0.0.1:{port}/{path}{query}").parse() {
         Ok(u) => u,
         Err(e) => return err(StatusCode::BAD_REQUEST, e.to_string()),
     };
@@ -151,16 +224,50 @@ async fn proxy(
     parts.headers.remove(header::HOST);
 
     let outgoing = Request::from_parts(parts, body);
-    let response = match state.proxy.request(outgoing).await {
+    let response = if use_tls {
+        state.proxy_tls.request(outgoing).await
+    } else {
+        state.proxy.request(outgoing).await
+    };
+    let response = match response {
         Ok(r) => r,
         Err(e) => {
-            warn!(facet = %id, port, error = %e, "proxy request failed");
+            warn!(facet = %id, port, tls = use_tls, error = %e, "proxy request failed");
             return err(
                 StatusCode::BAD_GATEWAY,
                 format!("`{id}` is not answering on port {port}"),
             );
         }
     };
+
+    // An app redirecting us to HTTPS on its own port is telling us it wants
+    // TLS. Record that and retry rather than handing the browser a redirect to
+    // an address only this host can reach.
+    if !use_tls
+        && response.status().is_redirection()
+        && let Some(location) = response.headers().get(header::LOCATION)
+        && let Ok(value) = location.to_str()
+        && value.starts_with(&format!("https://127.0.0.1:{port}"))
+    {
+        debug!(facet = %id, port, "app requires TLS; switching backend");
+        state
+            .tls_backends
+            .write()
+            .expect("tls set poisoned")
+            .insert(id.clone());
+        // 307 preserves the method and body, so a POST that triggered the
+        // discovery is replayed rather than silently downgraded to a GET.
+        let here = format!("{prefix}/{path}{query}");
+        return match HeaderValue::from_str(&here) {
+            Ok(location) => {
+                let mut redirect = Response::new(Body::empty());
+                *redirect.status_mut() = StatusCode::TEMPORARY_REDIRECT;
+                redirect.headers_mut().insert(header::LOCATION, location);
+                redirect
+            }
+            Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+        };
+    }
 
     let (mut parts, body) = response.into_parts();
     for name in HOP_BY_HOP {

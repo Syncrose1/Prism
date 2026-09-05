@@ -31,6 +31,11 @@ rust-embed = "8"
 hyper = { version = "1", features = ["client", "http1"] }
 hyper-util = { version = "0.1", features = ["client", "client-legacy", "http1", "tokio"] }
 http-body-util = "0.1"
+# Some apps insist on TLS even on loopback (Syncthing redirects http->https on
+# its own port). Proxying to them needs an HTTPS client. See proxy.rs for why
+# certificate verification is skipped for loopback specifically.
+hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "ring", "webpki-tokio"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 # Streaming file bodies. Reading a 20 GB model into memory to serve it would be
 # a memory incident caused by the memory-incident daemon.
 tokio-util = { version = "0.7", features = ["io"] }
