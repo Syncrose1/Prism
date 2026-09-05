@@ -1521,14 +1521,68 @@ function appProxy(facet) {
     return d;
   }
 
-  const f = document.createElement('iframe');
-  f.src = `/facet/${encodeURIComponent(facet.id)}/`;
-  f.setAttribute('allow', 'clipboard-read; clipboard-write; fullscreen');
-  host.append(f);
+  function frame() {
+    host.innerHTML = '';
+    const f = document.createElement('iframe');
+    f.src = `/facet/${encodeURIComponent(facet.id)}/`;
+    f.setAttribute('allow', 'clipboard-read; clipboard-write; fullscreen');
+    host.append(f);
+  }
 
-  // A stopped workload answers nothing; say which it is rather than showing a
-  // blank frame.
-  f.addEventListener('load', () => host.classList.add('loaded'));
+  // A stopped workload answers nothing, and a raw gateway error is a poor way
+  // to say "it is not running". Check first and offer to start it.
+  async function probe() {
+    host.innerHTML = '<div class="direct"><p>connecting…</p></div>';
+    let live = false;
+    try {
+      const r = await fetch(`/facet/${encodeURIComponent(facet.id)}/`, {
+        credentials: 'same-origin', redirect: 'follow'
+      });
+      live = r.status < 500;
+    } catch { live = false; }
+
+    if (live) return frame();
+
+    host.innerHTML = `<div class="direct">
+        <p><b>${facet.name}</b> is not answering on port ${facet.expose.port}.</p>
+        <button class="btn start">${facet.pty ? 'Launch' : 'Start'} ${facet.name}</button>
+        <p class="cav">Once it is up, this window will connect.</p>
+      </div>`;
+    host.querySelector('.start').onclick = async () => {
+      const btn = host.querySelector('.start');
+      btn.textContent = 'starting…';
+      btn.disabled = true;
+      try {
+        const r = await API.post(`/api/facets/${encodeURIComponent(facet.id)}/start`);
+        // An interactive launcher needs its prompts answered before it listens.
+        if (r && r.pty && r.session) {
+          makeWindow({
+            app: 'terminal', title: 'Terminal', meta: r.session.title,
+            w: 620, h: 380, content: appTerminal(r.session.id)
+          });
+        }
+      } catch (e) {
+        alert(e.message || 'could not start');
+        btn.textContent = 'Retry';
+        btn.disabled = false;
+        return;
+      }
+      // Poll rather than guess: a model-loading workload takes a while to
+      // start listening, and a fixed delay would be wrong either way.
+      const deadline = Date.now() + 120000;
+      const wait = async () => {
+        if (Date.now() > deadline) { btn.textContent = 'Retry'; btn.disabled = false; return; }
+        try {
+          const r = await fetch(`/facet/${encodeURIComponent(facet.id)}/`, { credentials: 'same-origin' });
+          if (r.status < 500) return frame();
+        } catch {}
+        setTimeout(wait, 2000);
+      };
+      wait();
+    };
+  }
+
+  probe();
   return d;
 }
 
