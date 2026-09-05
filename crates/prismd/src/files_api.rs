@@ -15,7 +15,7 @@ use axum::{
     extract::{Query, State},
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{get, post},
 };
 use prism_core::auth::Sensitivity;
 use prism_core::files::{list, path as fpath};
@@ -32,6 +32,236 @@ pub fn routes() -> Router<AppState> {
         .route("/api/files/list", get(listing))
         .route("/api/files/raw", get(raw))
         .route("/api/files/thumb", get(thumb))
+        .route("/api/files/mkdir", post(mkdir))
+        .route("/api/files/rename", post(rename))
+        .route("/api/files/delete", post(delete))
+        .route("/api/files/upload", post(upload))
+}
+
+/// Resolve a *writable* root, refusing when it is read-only.
+///
+/// Write access is per-root rather than global: the operator can expose their
+/// whole home read-only and a scratch directory writable, and a mistake in one
+/// cannot damage the other.
+fn writable_root<'a>(state: &'a AppState, name: &str) -> Result<&'a fpath::Root, Response> {
+    let root = fpath::find(&state.roots, name)
+        .map_err(|e| err(StatusCode::NOT_FOUND, "no_root", e.public_message()))?;
+    if !root.writable {
+        return Err(err(
+            StatusCode::FORBIDDEN,
+            "read_only",
+            format!("root `{name}` is read-only"),
+        ));
+    }
+    Ok(root)
+}
+
+/// Resolve the *parent* of something that does not exist yet, then append one
+/// validated component.
+///
+/// `resolve` canonicalises, which requires the path to exist — so creating a
+/// file needs this two-step: confirm the directory is inside the root, then add
+/// a name that cannot contain a separator or `..`.
+fn resolve_new(
+    state: &AppState,
+    root_name: &str,
+    parent: &str,
+    name: &str,
+) -> Result<(std::path::PathBuf, std::path::PathBuf), Response> {
+    let root = writable_root(state, root_name)?;
+    let name = name.trim();
+    if name.is_empty() || !fpath::is_safe_new_path(name) || name.contains('/') {
+        return Err(err(StatusCode::BAD_REQUEST, "bad_name", "invalid name"));
+    }
+    let dir = fpath::resolve(root, parent)
+        .map_err(|e| err(StatusCode::NOT_FOUND, "not_found", e.public_message()))?;
+    if !dir.is_dir() {
+        return Err(err(StatusCode::BAD_REQUEST, "not_a_directory", "not a directory"));
+    }
+    Ok((dir.join(name), dir))
+}
+
+#[derive(Deserialize)]
+struct MkdirRequest {
+    root: String,
+    #[serde(default)]
+    path: String,
+    name: String,
+}
+
+async fn mkdir(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<MkdirRequest>,
+) -> Response {
+    if let Some(d) = guard(&state, &headers) {
+        return d;
+    }
+    let (target, _) = match resolve_new(&state, &body.root, &body.path, &body.name) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    if target.exists() {
+        return err(StatusCode::CONFLICT, "exists", "already exists");
+    }
+    match tokio::fs::create_dir(&target).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, "mkdir_failed", e.to_string()),
+    }
+}
+
+#[derive(Deserialize)]
+struct RenameRequest {
+    root: String,
+    /// Existing path, relative to the root.
+    path: String,
+    /// New basename. Renaming, not moving — a move needs a destination path and
+    /// its own confinement check.
+    name: String,
+}
+
+async fn rename(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<RenameRequest>,
+) -> Response {
+    if let Some(d) = guard(&state, &headers) {
+        return d;
+    }
+    let root = match writable_root(&state, &body.root) {
+        Ok(r) => r,
+        Err(r) => return r,
+    };
+    let from = match fpath::resolve(root, &body.path) {
+        Ok(p) => p,
+        Err(e) => return err(StatusCode::NOT_FOUND, "not_found", e.public_message()),
+    };
+    let name = body.name.trim();
+    if name.is_empty() || !fpath::is_safe_new_path(name) || name.contains('/') {
+        return err(StatusCode::BAD_REQUEST, "bad_name", "invalid name");
+    }
+    let Some(parent) = from.parent() else {
+        return err(StatusCode::BAD_REQUEST, "no_parent", "cannot rename this");
+    };
+    let to = parent.join(name);
+    if to.exists() {
+        return err(StatusCode::CONFLICT, "exists", "already exists");
+    }
+    match tokio::fs::rename(&from, &to).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, "rename_failed", e.to_string()),
+    }
+}
+
+#[derive(Deserialize)]
+struct DeleteRequest {
+    root: String,
+    path: String,
+    /// Required for a non-empty directory, so a stray click cannot remove a
+    /// tree. There is no undo here and no trash.
+    #[serde(default)]
+    recursive: bool,
+}
+
+async fn delete(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<DeleteRequest>,
+) -> Response {
+    if let Some(d) = guard(&state, &headers) {
+        return d;
+    }
+    let root = match writable_root(&state, &body.root) {
+        Ok(r) => r,
+        Err(r) => return r,
+    };
+    let target = match fpath::resolve(root, &body.path) {
+        Ok(p) => p,
+        Err(e) => return err(StatusCode::NOT_FOUND, "not_found", e.public_message()),
+    };
+    // Deleting the root itself would remove the thing the operator configured.
+    if target == root.path {
+        return err(StatusCode::FORBIDDEN, "is_root", "cannot delete a root");
+    }
+
+    let result = if target.is_dir() {
+        if body.recursive {
+            tokio::fs::remove_dir_all(&target).await
+        } else {
+            tokio::fs::remove_dir(&target).await
+        }
+    } else {
+        tokio::fs::remove_file(&target).await
+    };
+    match result {
+        Ok(()) => {
+            warn!(path = %target.display(), "file deleted");
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Err(e) => err(StatusCode::CONFLICT, "delete_failed", e.to_string()),
+    }
+}
+
+/// Upload one file. Destination comes from the query, body is the raw bytes.
+///
+/// Streamed to disk rather than buffered: the operator moves model files, and
+/// reading a 20 GB upload into memory would be the failure this daemon exists
+/// to prevent.
+async fn upload(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<MkdirRequest>,
+    body: axum::body::Body,
+) -> Response {
+    if let Some(d) = guard(&state, &headers) {
+        return d;
+    }
+    let (target, _) = match resolve_new(&state, &q.root, &q.path, &q.name) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    if target.exists() {
+        return err(StatusCode::CONFLICT, "exists", "already exists");
+    }
+
+    use futures_util::StreamExt;
+    use tokio::io::AsyncWriteExt;
+
+    // Written to a temporary name and renamed, so an interrupted upload never
+    // leaves a truncated file that looks complete.
+    let tmp = target.with_extension("prism-upload");
+    let mut file = match tokio::fs::File::create(&tmp).await {
+        Ok(f) => f,
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, "create_failed", e.to_string()),
+    };
+
+    let mut stream = body.into_data_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = match chunk {
+            Ok(c) => c,
+            Err(e) => {
+                let _ = tokio::fs::remove_file(&tmp).await;
+                return err(StatusCode::BAD_REQUEST, "upload_failed", e.to_string());
+            }
+        };
+        if let Err(e) = file.write_all(&chunk).await {
+            let _ = tokio::fs::remove_file(&tmp).await;
+            return err(StatusCode::INTERNAL_SERVER_ERROR, "write_failed", e.to_string());
+        }
+    }
+    if let Err(e) = file.sync_all().await {
+        let _ = tokio::fs::remove_file(&tmp).await;
+        return err(StatusCode::INTERNAL_SERVER_ERROR, "sync_failed", e.to_string());
+    }
+    drop(file);
+
+    match tokio::fs::rename(&tmp, &target).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => {
+            let _ = tokio::fs::remove_file(&tmp).await;
+            err(StatusCode::INTERNAL_SERVER_ERROR, "rename_failed", e.to_string())
+        }
+    }
 }
 
 #[derive(Serialize)]

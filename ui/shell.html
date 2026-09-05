@@ -258,6 +258,22 @@ body {
 .crumb a { color: var(--ink-dim); cursor: pointer; text-decoration: none; padding: 1px 4px; border-radius: 2px; }
 .crumb a:hover { color: var(--ink); background: var(--raised); }
 .crumb s { color: var(--ink-ghost); text-decoration: none; }
+.fbar { display: flex; align-items: center; gap: 8px; margin-bottom: 9px; }
+.fsearch {
+  flex: 1; min-width: 0; font: inherit; font-size: 11.5px; padding: 4px 8px;
+  background: var(--base); border: 1px solid var(--line); border-radius: var(--r);
+  color: var(--ink); outline: none;
+}
+.fsearch:focus { border-color: var(--line-hi); }
+.fsearch::placeholder { color: var(--ink-ghost); }
+.ftools { display: flex; gap: 5px; flex: 0 0 auto; }
+.ftools .ro { color: var(--ink-ghost); font-size: 10px; letter-spacing: .12em; text-transform: uppercase; }
+.tool {
+  font: inherit; font-size: 10.5px; padding: 3px 8px; cursor: pointer;
+  background: transparent; border: 1px solid var(--line-hi); border-radius: 2px;
+  color: var(--ink-faint); white-space: nowrap;
+}
+.tool:hover { color: var(--ink); border-color: var(--ink-faint); background: var(--raised); }
 .rootsel {
   font: inherit; font-size: 11px; padding: 1px 4px; cursor: pointer;
   background: var(--raised); color: var(--ink); border: 1px solid var(--line-hi);
@@ -314,7 +330,7 @@ body {
   overflow: hidden; min-height: 0;
 }
 .gal .stage img, .gal .stage video {
-  max-width: 100%; max-height: 100%; object-fit: contain; display: block;
+  width: 100%; height: 100%; object-fit: contain; display: block;
   transition: opacity .16s;
 }
 .gal .stage .miss { color: var(--ink-ghost); font-size: 11px; letter-spacing: .18em; text-transform: uppercase; }
@@ -792,9 +808,166 @@ const fmtSize = b => {
 };
 
 function appFiles(startRoot, startPath = '') {
-  const d = el(`<div class="crumb"></div><div class="flist"></div>`);
+  const d = el(`<div class="fbar">
+      <input class="fsearch" type="search" placeholder="Filter…" spellcheck="false">
+      <span class="ftools"></span>
+    </div>
+    <div class="crumb"></div>
+    <div class="flist"></div>`);
   let root = startRoot || (ROOTS[0] && ROOTS[0].name) || '';
   let path = startPath;
+  let entries = [];        // the last listing, unfiltered
+  let writable = false;
+  let filter = '';
+
+  const search = d.querySelector('.fsearch');
+  // Filters the current directory rather than searching the tree: instant, no
+  // request, and it is what "quickly navigate" means in a folder of 569 files.
+  search.addEventListener('input', () => {
+    filter = search.value.trim().toLowerCase();
+    paint();
+  });
+  search.addEventListener('keydown', e => {
+    if (e.key === 'Escape') { search.value = ''; filter = ''; paint(); }
+    // Enter opens the only match, so filter-then-Enter walks a deep tree fast.
+    if (e.key === 'Enter') {
+      const shown = visible();
+      if (shown.length === 1) open(shown[0]);
+    }
+    e.stopPropagation();
+  });
+
+  const visible = () => entries.filter(e => !filter || e.name.toLowerCase().includes(filter));
+
+  const rel = name => (path ? `${path}/${name}` : name);
+
+  function open(e) {
+    if (e.is_dir) { path = rel(e.name); search.value = ''; filter = ''; render(); return; }
+    if (VIEWABLE.has(e.kind)) {
+      // Gallery opens on the selection and groups the whole directory around
+      // it, which is the only context in which grouping means anything.
+      makeWindow({
+        app: 'gallery', title: 'Gallery', meta: e.name, w: 720, h: 560,
+        args: { root, path, name: e.name },
+        content: appGallery(root, path, e.name)
+      });
+    } else {
+      openPreview(root, rel(e.name), e);
+    }
+  }
+
+  async function act(what, body, ok) {
+    try {
+      await API.post('/api/files/' + what, { root, path, ...body });
+      if (ok) ok();
+      render();
+    } catch (err) {
+      alert(err.message || ('could not ' + what));
+    }
+  }
+
+  function contextMenu(ev, e) {
+    ev.preventDefault();
+    ev.stopPropagation();
+    const items = [];
+    const url = `/api/files/raw?root=${encodeURIComponent(root)}&path=${encodeURIComponent(rel(e.name))}`;
+
+    if (!e.is_dir) {
+      items.push(['Open', () => open(e)]);
+      items.push(['Download', () => {
+        const a = document.createElement('a');
+        a.href = url + '&download=true';
+        a.download = e.name;
+        a.click();
+      }]);
+    } else {
+      items.push(['Open', () => open(e)]);
+    }
+    items.push(['Copy path', async () => {
+      const full = `${root}:/${rel(e.name)}`;
+      try { await navigator.clipboard.writeText(full); }
+      catch { prompt('Path', full); }   // clipboard needs a secure context
+    }]);
+
+    if (writable) {
+      items.push(null);
+      items.push(['Rename…', () => {
+        const name = prompt('Rename to', e.name);
+        if (name && name !== e.name) act('rename', { path: rel(e.name), name });
+      }]);
+      items.push(['Delete', () => {
+        if (!confirm(`Delete "${e.name}"?${e.is_dir ? ' Everything inside goes too.' : ''}`)) return;
+        act('delete', { path: rel(e.name), recursive: e.is_dir });
+      }]);
+    }
+    showMenu(ev.clientX, ev.clientY, items);
+  }
+
+  function paint() {
+    const list = d.querySelector('.flist');
+    list.innerHTML = '';
+    const shown = visible();
+
+    if (!shown.length) {
+      const m = document.createElement('div');
+      m.className = 'empty';
+      m.textContent = filter ? `nothing matching "${filter}"` : 'empty directory';
+      list.append(m);
+      return;
+    }
+
+    for (const e of shown) {
+      const row = document.createElement('div');
+      row.className = 'f' + (e.is_dir ? ' dir' : '');
+      row.innerHTML = `<span class="ic">${FICON[e.kind] || '\u25c6'}</span><span class="nm"></span><span class="sz">${e.is_dir ? '\u2014' : fmtSize(e.size)}</span>`;
+      row.querySelector('.nm').textContent = e.name + (e.is_link ? ' \u2192' : '');
+      row.onclick = () => {
+        list.querySelectorAll('.f').forEach(f => f.classList.remove('sel'));
+        row.classList.add('sel');
+      };
+      row.ondblclick = () => open(e);
+      row.oncontextmenu = ev => contextMenu(ev, e);
+      list.append(row);
+    }
+  }
+
+  function toolbar() {
+    const tools = d.querySelector('.ftools');
+    tools.innerHTML = '';
+    if (!writable) {
+      tools.innerHTML = '<span class="ro">read-only</span>';
+      return;
+    }
+    const mk = (label, title, fn) => {
+      const b = document.createElement('button');
+      b.className = 'tool';
+      b.textContent = label;
+      b.title = title;
+      b.onclick = fn;
+      return b;
+    };
+    tools.append(mk('+ Folder', 'New folder', () => {
+      const name = prompt('Folder name');
+      if (name) act('mkdir', { name });
+    }));
+    tools.append(mk('\u2191 Upload', 'Upload a file here', () => {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.multiple = true;
+      input.onchange = async () => {
+        for (const file of input.files) {
+          const url = `/api/files/upload?root=${encodeURIComponent(root)}` +
+                      `&path=${encodeURIComponent(path)}&name=${encodeURIComponent(file.name)}`;
+          try {
+            const r = await fetch(url, { method: 'POST', credentials: 'same-origin', body: file });
+            if (!r.ok) alert(`${file.name}: ${(await r.json().catch(() => ({}))).detail || r.statusText}`);
+          } catch (err) { alert(`${file.name}: ${err.message}`); }
+        }
+        render();
+      };
+      input.click();
+    }));
+  }
 
   async function render() {
     const list = d.querySelector('.flist'), crumb = d.querySelector('.crumb');
@@ -809,11 +982,12 @@ function appFiles(startRoot, startPath = '') {
       list.innerHTML = '<div class="empty">no file roots configured</div>';
       return;
     }
-    list.innerHTML = '<div class="empty">loading…</div>';
+    writable = !!(ROOTS.find(r => r.name === root) || {}).writable;
+    list.innerHTML = '<div class="empty">loading\u2026</div>';
 
     let data;
     try {
-      data = await API.get(`/api/files/list?root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}&limit=500`);
+      data = await API.get(`/api/files/list?root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}&limit=1000`);
     } catch (e) {
       list.innerHTML = '';
       const m = document.createElement('div');
@@ -821,6 +995,11 @@ function appFiles(startRoot, startPath = '') {
       list.append(m);
       return;
     }
+
+    path = data.path;
+    entries = data.entries;
+    lastBrowsed.root = root;
+    lastBrowsed.path = data.path;
 
     // Breadcrumb: root first, then each segment, each navigable.
     crumb.innerHTML = '';
@@ -847,45 +1026,13 @@ function appFiles(startRoot, startPath = '') {
       crumb.append(sep(), mk(p, () => { path = parts.slice(0, i + 1).join('/'); render(); }));
     });
 
-    list.innerHTML = '';
-    if (!data.entries.length) {
-      list.innerHTML = '<div class="empty">empty directory</div>';
-    }
-    for (const e of data.entries) {
-      const row = document.createElement('div');
-      row.className = 'f' + (e.is_dir ? ' dir' : '');
-      row.innerHTML = `<span class="ic">${FICON[e.kind] || '◆'}</span><span class="nm"></span><span class="sz">${e.is_dir ? '—' : fmtSize(e.size)}</span>`;
-      row.querySelector('.nm').textContent = e.name + (e.is_link ? ' →' : '');
-      const full = data.path ? `${data.path}/${e.name}` : e.name;
-
-      if (e.is_dir) {
-        row.onclick = () => { path = full; render(); };
-      } else {
-        row.onclick = () => {
-          list.querySelectorAll('.f').forEach(f => f.classList.remove('sel'));
-          row.classList.add('sel');
-        };
-        row.ondblclick = () => {
-          if (VIEWABLE.has(e.kind)) {
-            makeWindow({
-              app: 'gallery', title: 'Gallery', meta: e.name, w: 640, h: 520,
-              content: appGallery(root, data.path, e.name)
-            });
-          } else {
-            openPreview(root, full, e);
-          }
-        };
-      }
-      list.append(row);
-    }
-
-    lastBrowsed.root = root;
-    lastBrowsed.path = data.path;
+    toolbar();
+    paint();
 
     const win = d.closest('.win');
     if (win) {
       win.querySelector('.meta').textContent =
-        `${data.path || root} · ${data.total} item${data.total === 1 ? '' : 's'}`;
+        `${data.path || root} \u00b7 ${data.total} item${data.total === 1 ? '' : 's'}`;
     }
   }
 
@@ -1459,14 +1606,19 @@ function appTerminal(existingId) {
   return d;
 }
 
+/* Gallery is deliberately absent from the dock and the palette: it opens from a
+   selection in Files rather than as an empty app, which is the only way it has
+   a directory to group. VIEWERS holds apps that are reachable only that way. */
+const VIEWERS = {
+  gallery: { title: 'Gallery', w: 720, h: 560, make: a => appGallery(a.root, a.path, a.name) }
+};
+
 const APPS = {
   vitals:   { title: 'Vitals',   w: 348, h: 400, make: () => appVitals() },
   files:    { title: 'Files',    w: 430, h: 380, make: () => appFiles() },
   facets:   { title: 'Facets',   w: 392, h: 286, make: appFacets },
   timeline: { title: 'Timeline', w: 420, h: 240, make: appTimeline },
-  gallery:  { title: 'Gallery',  w: 640, h: 520, multi: true,
-              make: () => appGallery(lastBrowsed.root || (ROOTS[0] && ROOTS[0].name) || '',
-                                     lastBrowsed.path, null) },
+
   terminal: { title: 'Terminal', w: 560, h: 340, make: appTerminal, multi: true }
 };
 
@@ -1481,7 +1633,7 @@ function launch(app) {
 
 /* ── dock ────────────────────────────────────────────────── */
 const dock = $('#dock');
-['vitals','files','gallery','terminal','facets','timeline'].filter(a => APPS[a]).forEach(app => {
+['vitals','files','terminal','facets','timeline'].filter(a => APPS[a]).forEach(app => {
   const b = document.createElement('div');
   b.className = 'dockitem'; b.dataset.app = app;
   b.innerHTML = svg(app) + `<span class="run"></span><span class="tip">${APPS[app].title}</span>`;
@@ -1551,20 +1703,41 @@ addEventListener('keydown', e => {
 /* ── context menu ────────────────────────────────────────── */
 const ctx = $('#ctx');
 function hideCtx() { ctx.classList.remove('show'); }
+
+/* Shared context menu. `items` is a list of [label, fn], with null for a
+   separator. Prism captures right-click so actions belong to the app under the
+   cursor rather than the browser. */
+function showMenu(x, y, items) {
+  ctx.innerHTML = '';
+  for (const item of items) {
+    if (!item) {
+      const sep = document.createElement('div');
+      sep.className = 'cs';
+      ctx.append(sep);
+      continue;
+    }
+    const [label, fn] = item;
+    const row = document.createElement('div');
+    row.className = 'ci';
+    row.textContent = label;
+    row.onclick = () => { hideCtx(); fn(); };
+    ctx.append(row);
+  }
+  ctx.classList.add('show');
+  // Measure after showing, so a menu near an edge folds back on screen.
+  const r = ctx.getBoundingClientRect();
+  ctx.style.left = Math.min(x, innerWidth - r.width - 8) + 'px';
+  ctx.style.top = Math.min(y, innerHeight - r.height - 8) + 'px';
+}
 desk.addEventListener('contextmenu', e => {
+  // A window's own handler takes precedence; only bare desktop reaches here.
   if (e.target.closest('.win')) return;
   e.preventDefault();
-  ctx.innerHTML = '';
-  const add = (label, fn) => {
-    const d = document.createElement('div'); d.className = 'ci'; d.textContent = label;
-    d.onclick = () => { fn(); hideCtx(); }; ctx.append(d);
-  };
-  Object.entries(APPS).forEach(([k, a]) => add('Open ' + a.title, () => launch(k)));
-  const s = document.createElement('div'); s.className = 'cs'; ctx.append(s);
-  add('Command palette…', openPal);
-  add('Close all windows', () => [...wins.values()].forEach(close));
-  Object.assign(ctx.style, { left: Math.min(e.clientX, innerWidth - 210) + 'px', top: Math.min(e.clientY, innerHeight - 240) + 'px' });
-  ctx.classList.add('show');
+  const items = Object.entries(APPS).map(([k, a]) => ['Open ' + a.title, () => launch(k)]);
+  items.push(null);
+  items.push(['Command palette…', openPal]);
+  items.push(['Close all windows', () => [...wins.values()].forEach(close)]);
+  showMenu(e.clientX, e.clientY, items);
 });
 addEventListener('pointerdown', e => { if (!e.target.closest('#ctx')) hideCtx(); });
 
@@ -1730,7 +1903,7 @@ async function restore() {
 
   restoring = true;
   for (const w of state.windows) {
-    const a = APPS[w.app];
+    const a = APPS[w.app] || VIEWERS[w.app];
     if (!a) continue;                       // an app this build no longer has
     try {
       const win = makeWindow({
