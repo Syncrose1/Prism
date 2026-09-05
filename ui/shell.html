@@ -314,6 +314,33 @@ body {
 .frameapp .direct .cav { color: var(--ink-ghost); font-size: 11px; max-width: 34ch; }
 .frameapp .direct code { color: var(--ink-faint); }
 
+/* Toasts */
+.toasts { position: fixed; bottom: 58px; right: 16px; z-index: 900;
+  display: flex; flex-direction: column; align-items: flex-end; gap: 7px;
+  pointer-events: none; }
+.toast { font-size: 11.5px; letter-spacing: .01em; padding: 8px 12px;
+  border-radius: 5px; border: 1px solid var(--line-hi);
+  background: rgba(16,19,25,.97); color: var(--ink);
+  box-shadow: 0 12px 34px -12px rgba(0,0,0,.9);
+  transition: opacity .2s ease, transform .2s ease;
+  animation: toastin .2s ease backwards; max-width: 320px; }
+.toast.bad { border-color: var(--warn); color: var(--warn); }
+@keyframes toastin { from { opacity: 0; transform: translateY(6px); } }
+
+/* Host file picker */
+.picker { position: fixed; inset: 0; z-index: 850; display: grid; place-items: center;
+  background: rgba(3,4,6,.6); backdrop-filter: blur(6px); animation: fade .14s ease backwards; }
+.pk { width: min(560px, 92vw); height: min(560px, 86vh); display: flex; flex-direction: column;
+  background: rgba(16,19,25,.98); border: 1px solid var(--line-hi); border-radius: 8px;
+  box-shadow: 0 30px 80px -20px rgba(0,0,0,.95); padding: 14px; gap: 9px; }
+.pkhead { display: flex; align-items: baseline; gap: 10px; }
+.pkt { font-size: 10.5px; letter-spacing: .2em; text-transform: uppercase; color: var(--ink-dim); }
+.pkc { font-size: 10.5px; color: var(--ink-ghost); margin-left: auto; }
+.pkl { flex: 1; overflow-y: auto; min-height: 0; }
+.pkfoot { display: flex; align-items: center; gap: 8px; }
+.pksel { font-size: 11px; color: var(--ink-ghost); margin-right: auto; }
+.pkok:disabled { opacity: .4; cursor: default; }
+
 /* Music */
 .music { position: absolute; inset: 0; display: flex; flex-direction: column; background: #06070a; }
 .music .now { padding: 14px 14px 8px; flex: 0 0 auto; }
@@ -417,6 +444,80 @@ body {
 }
 .termbadge.live { color: var(--green); border-color: rgba(74,222,128,.4); }
 .termbadge.det  { color: var(--amber); border-color: rgba(251,191,36,.4); }
+
+/* Make a proxied app's file picker browse the host, not this device.
+   `<input type="file">` always opens the *client's* picker — correct browser
+   behaviour, and the reason ComfyUI offers the laptop's filesystem when every
+   image worth loading is on the machine ComfyUI is running on.
+
+   The proxied document is served from /facet/<id>/, so it is same-origin with
+   the shell and its events are reachable. A capture-phase listener takes the
+   click before the browser acts on it, Prism's own picker answers instead, and
+   the chosen bytes are handed back as a File so the page cannot tell the
+   difference. Programmatic input.click() is caught too: it dispatches through
+   the same capture path.
+
+   The file travels host → browser → host, which is wasteful and deliberate.
+   Writing into the app's upload directory behind its back would desynchronise
+   whatever index it keeps; going through its own upload path means it stays
+   the authority on its own state. */
+function interceptFilePicker(iframe, facet) {
+  let doc;
+  try {
+    doc = iframe.contentDocument;
+  } catch {
+    return; // Cross-origin after a redirect: nothing to do, and not an error.
+  }
+  if (!doc || doc.__prismPicker) return;
+  doc.__prismPicker = true;
+
+  doc.addEventListener('click', async ev => {
+    const input = ev.target;
+    if (!(input instanceof HTMLInputElement) || input.type !== 'file') return;
+    if (input.dataset.prismBypass) return; // Deliberate escape hatch, below.
+
+    ev.preventDefault();
+    ev.stopPropagation();
+
+    const picked = await pickFiles({
+      multiple: input.multiple,
+      accept: input.accept || ''
+    });
+    if (!picked || !picked.length) return;
+
+    let files;
+    try {
+      files = await Promise.all(picked.map(async p => {
+        const url = `/api/files/raw?root=${encodeURIComponent(p.root)}&path=${encodeURIComponent(p.path)}`;
+        const r = await fetch(url, { credentials: 'same-origin' });
+        if (!r.ok) throw new Error(`${p.name}: ${r.status}`);
+        const blob = await r.blob();
+        return new File([blob], p.name, {
+          type: blob.type || 'application/octet-stream',
+          lastModified: Date.now()
+        });
+      }));
+    } catch (e) {
+      toast(`Could not read from host — ${e.message}`, 'bad');
+      return;
+    }
+
+    // DataTransfer is the only way to set input.files; assigning a FileList
+    // directly is not permitted.
+    const dt = new DataTransfer();
+    for (const f of files) dt.items.add(f);
+    input.files = dt.files;
+
+    // Both events, because frameworks listen for different ones: React reads
+    // input, most plain handlers read change.
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+
+    toast(files.length === 1
+      ? `Sent ${files[0].name} to ${facet.name}`
+      : `Sent ${files.length} files to ${facet.name}`);
+  }, true);
+}
 
 /* Facets */
 .facet { border: 1px solid var(--line); border-radius: var(--r); padding: 10px 11px; margin-bottom: 8px; background: var(--base); }
@@ -833,6 +934,27 @@ let ROOTS = [];
 const lastBrowsed = { root: '', path: '' };
 async function loadRoots() {
   try { ROOTS = await API.get('/api/files/roots'); } catch { ROOTS = []; }
+}
+
+/* Transient feedback. `alert()` blocks the whole shell and has to be dismissed,
+   which is the wrong shape for "this worked" — it interrupts to say nothing
+   went wrong. Failures still use alert where the operator must acknowledge. */
+function toast(msg, kind = 'ok') {
+  let rail = document.querySelector('.toasts');
+  if (!rail) {
+    rail = document.createElement('div');
+    rail.className = 'toasts';
+    document.body.append(rail);
+  }
+  const t = document.createElement('div');
+  t.className = 'toast ' + kind;
+  t.textContent = msg;
+  rail.append(t);
+  setTimeout(() => {
+    t.style.opacity = '0';
+    t.style.transform = 'translateY(4px)';
+    setTimeout(() => t.remove(), 220);
+  }, kind === 'bad' ? 5200 : 2800);
 }
 
 const FICON = { dir:'▸', image:'▤', video:'▶', audio:'♪', text:'≡', pdf:'▦', archive:'▣', other:'◆' };
@@ -1581,6 +1703,7 @@ function appProxy(facet) {
     const f = document.createElement('iframe');
     f.src = `/facet/${encodeURIComponent(facet.id)}/`;
     f.setAttribute('allow', 'clipboard-read; clipboard-write; fullscreen');
+    f.addEventListener('load', () => interceptFilePicker(f, facet));
     host.append(f);
   }
 
@@ -1639,6 +1762,133 @@ function appProxy(facet) {
 
   probe();
   return d;
+}
+
+/* Choose a file from the host, not from this device.
+   Returns the selected entries, or null if cancelled. A modal rather than a
+   window: it is answering a question the caller is blocked on, and a floating
+   window that could be lost behind others would be the wrong shape. */
+function pickFiles({ multiple = false, accept = '' } = {}) {
+  return new Promise(resolve => {
+    const wrap = document.createElement('div');
+    wrap.className = 'picker';
+    wrap.innerHTML = `<div class="pk">
+        <div class="pkhead">
+          <span class="pkt">Choose from this machine</span>
+          <span class="pkc"></span>
+        </div>
+        <div class="crumb"></div>
+        <input class="fsearch pks" type="search" placeholder="Filter…" spellcheck="false">
+        <div class="flist pkl"></div>
+        <div class="pkfoot">
+          <span class="pksel"></span>
+          <button class="btn pkcancel">Cancel</button>
+          <button class="btn pkok">Choose</button>
+        </div>
+      </div>`;
+    document.body.append(wrap);
+
+    const list = wrap.querySelector('.pkl');
+    const crumb = wrap.querySelector('.crumb');
+    const search = wrap.querySelector('.pks');
+    const selLabel = wrap.querySelector('.pksel');
+    let root = lastBrowsed.root || (ROOTS[0] && ROOTS[0].name) || '';
+    let path = lastBrowsed.path || '';
+    let entries = [], filter = '';
+    const chosen = new Map();
+
+    // An `accept` of "image/*" or ".png,.jpg" should narrow what is offered,
+    // or the picker is noisier than the one it replaced.
+    const wanted = accept.split(',').map(a => a.trim().toLowerCase()).filter(Boolean);
+    const matches = e => {
+      if (!wanted.length) return true;
+      const name = e.name.toLowerCase();
+      return wanted.some(a =>
+        a.endsWith('/*') ? e.kind === a.slice(0, -2) : name.endsWith(a.replace(/^\*/, '')));
+    };
+
+    function close(result) { wrap.remove(); resolve(result); }
+
+    function paintSelection() {
+      selLabel.textContent = chosen.size
+        ? `${chosen.size} selected`
+        : (multiple ? 'select one or more' : 'select a file');
+      wrap.querySelector('.pkok').disabled = chosen.size === 0;
+    }
+
+    async function render() {
+      list.innerHTML = '<div class="empty">loading…</div>';
+      let data;
+      try {
+        data = await API.get(`/api/files/list?root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}&limit=1000`);
+      } catch (e) {
+        list.innerHTML = `<div class="empty">${e.message || 'could not read'}</div>`;
+        return;
+      }
+      path = data.path;
+      entries = data.entries;
+
+      crumb.innerHTML = '';
+      const sel = document.createElement('select');
+      sel.className = 'rootsel';
+      for (const r of ROOTS) {
+        const o = document.createElement('option');
+        o.value = r.name; o.textContent = r.name; o.selected = r.name === root;
+        sel.append(o);
+      }
+      sel.onchange = () => { root = sel.value; path = ''; render(); };
+      crumb.append(sel);
+      const parts = data.path ? data.path.split('/') : [];
+      parts.forEach((p, i) => {
+        const s2 = document.createElement('s'); s2.textContent = '/';
+        const a = document.createElement('a'); a.textContent = p;
+        a.onclick = () => { path = parts.slice(0, i + 1).join('/'); render(); };
+        crumb.append(s2, a);
+      });
+
+      list.innerHTML = '';
+      const shown = entries.filter(e =>
+        (!filter || e.name.toLowerCase().includes(filter)) && (e.is_dir || matches(e)));
+      if (!shown.length) {
+        list.innerHTML = '<div class="empty">nothing here</div>';
+        return;
+      }
+      for (const e of shown) {
+        const row = document.createElement('div');
+        const full = data.path ? `${data.path}/${e.name}` : e.name;
+        row.className = 'f' + (e.is_dir ? ' dir' : '') + (chosen.has(full) ? ' sel' : '');
+        row.innerHTML = `<span class="ic">${FICON[e.kind] || '\u25c6'}</span><span class="nm"></span><span class="sz">${e.is_dir ? '\u2014' : fmtSize(e.size)}</span>`;
+        row.querySelector('.nm').textContent = e.name;
+        row.onclick = () => {
+          if (e.is_dir) { path = full; search.value = ''; filter = ''; render(); return; }
+          if (chosen.has(full)) chosen.delete(full);
+          else {
+            if (!multiple) chosen.clear();
+            chosen.set(full, { root, path: full, name: e.name });
+          }
+          render();
+          paintSelection();
+        };
+        row.ondblclick = () => {
+          if (e.is_dir) return;
+          chosen.clear();
+          chosen.set(full, { root, path: full, name: e.name });
+          close([...chosen.values()]);
+        };
+        list.append(row);
+      }
+      paintSelection();
+    }
+
+    search.oninput = () => { filter = search.value.trim().toLowerCase(); render(); };
+    wrap.querySelector('.pkcancel').onclick = () => close(null);
+    wrap.querySelector('.pkok').onclick = () => close(chosen.size ? [...chosen.values()] : null);
+    wrap.addEventListener('click', e => { if (e.target === wrap) close(null); });
+    wrap.addEventListener('keydown', e => { if (e.key === 'Escape') close(null); });
+
+    render();
+    setTimeout(() => search.focus(), 40);
+  });
 }
 
 /* Music: a directory is an album.
