@@ -18,4 +18,7 @@ libc = "0.2"
 # needs. The monitor loop stays synchronous on its own thread so pressure
 # handling never waits on an async runtime that is itself starved.
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal"] }
-axum = "0.8"
+axum = { version = "0.8", features = ["ws"] }
+# Splitting the WebSocket into an independent sink and stream, so terminal
+# output can be pumped while keystrokes are read concurrently.
+futures-util = { version = "0.3", default-features = false }

@@ -15,6 +15,7 @@ mod api;
 mod bind;
 mod monitor;
 mod rescue;
+mod term_api;
 
 use anyhow::Context as _;
 use prism_core::auth::{AuthPolicy, Authenticator, session::SessionKey, totp};
@@ -58,20 +59,33 @@ fn main() -> anyhow::Result<()> {
 
     let vitals: api::SharedVitals = Arc::new(RwLock::new(api::Vitals::default()));
     let facets = Arc::new(profile.facet.clone());
+    let terminals = Arc::new(prism_core::term::session::SessionManager::new(
+        term_api::manager_from(&host.terminal),
+    ));
+    if host.terminal.enabled {
+        info!(
+            max_sessions = host.terminal.max_sessions,
+            scoped = host.terminal.use_scope,
+            "terminal sessions enabled"
+        );
+    } else {
+        info!("terminal sessions disabled by configuration");
+    }
 
     // The monitor owns its own thread so that neither half can stall the other.
     let monitor_vitals = Arc::clone(&vitals);
+    let monitor_terms = Arc::clone(&terminals);
     std::thread::Builder::new()
         .name("prism-monitor".into())
         .spawn(move || {
-            let mut monitor = monitor::Monitor::new(profile, monitor_vitals);
+            let mut monitor = monitor::Monitor::new(profile, monitor_vitals, monitor_terms);
             if let Err(e) = monitor.run() {
                 tracing::error!(error = %e, "monitor loop exited");
             }
         })
         .context("spawning monitor thread")?;
 
-    serve(host, auth, vitals, facets)
+    serve(host, auth, vitals, facets, terminals)
 }
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
@@ -80,6 +94,7 @@ async fn serve(
     auth: Arc<Authenticator>,
     vitals: api::SharedVitals,
     facets: Arc<Vec<prism_core::config::Facet>>,
+    terminals: Arc<prism_core::term::session::SessionManager>,
 ) -> anyhow::Result<()> {
     let addr = bind::resolve(&host.server.bind, host.server.port)?;
     let listener = tokio::net::TcpListener::bind(addr)
@@ -91,6 +106,7 @@ async fn serve(
         auth,
         vitals,
         facets,
+        terminals,
     });
 
     axum::serve(listener, app)

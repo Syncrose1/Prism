@@ -87,6 +87,7 @@ pub struct AppState {
     pub auth: Arc<Authenticator>,
     pub vitals: SharedVitals,
     pub facets: Arc<Vec<Facet>>,
+    pub terminals: Arc<prism_core::term::session::SessionManager>,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -97,6 +98,7 @@ pub fn router(state: AppState) -> Router {
         // Critical Functions Mode. Merged rather than nested so it shares no
         // middleware with the API surface — see ADR 0002.
         .merge(crate::rescue::routes())
+        .merge(crate::term_api::routes())
         .with_state(state)
 }
 

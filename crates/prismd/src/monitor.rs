@@ -29,10 +29,15 @@ pub struct Monitor {
     psi: memory::PsiTracker,
     vitals: SharedVitals,
     disk_paths: Vec<std::path::PathBuf>,
+    terminals: std::sync::Arc<prism_core::term::session::SessionManager>,
 }
 
 impl Monitor {
-    pub fn new(profile: Profile, vitals: SharedVitals) -> Self {
+    pub fn new(
+        profile: Profile,
+        vitals: SharedVitals,
+        terminals: std::sync::Arc<prism_core::term::session::SessionManager>,
+    ) -> Self {
         let (storms, skipped) = StormDetector::new(profile.storm);
         for reason in &skipped {
             info!(rule = %reason, "storm rule inactive on this host");
@@ -63,6 +68,7 @@ impl Monitor {
             psi: memory::PsiTracker::new(),
             vitals,
             disk_paths,
+            terminals,
         }
     }
 
@@ -107,6 +113,12 @@ impl Monitor {
                 }
 
                 if let Some(tier) = self.governor.observe(&reading) {
+                    // De-escalate terminal retention with the tier. Holding a
+                    // quarter of a megabyte of scrollback per session is a
+                    // luxury a failing machine cannot afford.
+                    crate::term_api::apply_tier(&self.terminals, tier);
+                    self.terminals.reap();
+
                     warn!(
                         tier = tier.as_str(),
                         driver = ?self.governor.driver(),

@@ -25,6 +25,42 @@ pub const DEFAULT_PORT: u16 = 9000;
 pub struct HostConfig {
     pub server: ServerConfig,
     pub files: FilesConfig,
+    pub terminal: TerminalConfig,
+}
+
+/// Terminal sessions.
+///
+/// Present as host config rather than profile config because whether remote
+/// shell access is acceptable is a property of the machine and its exposure,
+/// not of the workload profile running on it — and it should not travel between
+/// hosts in an exported profile. See ADR 0003 §4.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TerminalConfig {
+    /// An operator deploying to a machine where remote shell access is
+    /// unacceptable turns the feature off here, rather than relying on nobody
+    /// navigating to it.
+    pub enabled: bool,
+    /// Defaults to `$SHELL`.
+    pub shell: Option<String>,
+    pub scrollback_bytes: usize,
+    pub max_sessions: usize,
+    /// Wrap each session in a transient systemd scope. Only disable on hosts
+    /// with no user manager: without it a terminal is the one workload Prism
+    /// cannot contain or attribute.
+    pub use_scope: bool,
+}
+
+impl Default for TerminalConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            shell: None,
+            scrollback_bytes: 256 * 1024,
+            max_sessions: 16,
+            use_scope: true,
+        }
+    }
 }
 
 impl Default for HostConfig {
@@ -32,6 +68,7 @@ impl Default for HostConfig {
         Self {
             server: ServerConfig::default(),
             files: FilesConfig::default(),
+            terminal: TerminalConfig::default(),
         }
     }
 }
