@@ -213,7 +213,9 @@ body {
 .wb:hover { background: var(--ink-faint); }
 .wb.c:hover { background: var(--red); }
 
-.body { padding: 13px; overflow: auto; flex: 1 1 auto; }
+.body { padding: 13px; overflow: auto; flex: 1 1 auto; position: relative; }
+/* Apps that fill their window edge-to-edge opt out of the body padding. */
+.body.flush { padding: 0; overflow: hidden; }
 .body::-webkit-scrollbar { width: 10px; height: 10px; }
 .body::-webkit-scrollbar-thumb { background: var(--line-hi); border-radius: 9px; border: 3px solid transparent; background-clip: content-box; }
 .rz { position: absolute; right: 0; bottom: 0; width: 15px; height: 15px; cursor: nwse-resize; }
@@ -244,6 +246,12 @@ body {
 .crumb a { color: var(--ink-dim); cursor: pointer; text-decoration: none; padding: 1px 4px; border-radius: 2px; }
 .crumb a:hover { color: var(--ink); background: var(--raised); }
 .crumb s { color: var(--ink-ghost); text-decoration: none; }
+.rootsel {
+  font: inherit; font-size: 11px; padding: 1px 4px; cursor: pointer;
+  background: var(--raised); color: var(--ink); border: 1px solid var(--line-hi);
+  border-radius: 2px; outline: none;
+}
+.rootsel:hover { border-color: var(--ink-faint); }
 .flist { display: grid; gap: 1px; }
 .f { display: flex; align-items: center; gap: 9px; padding: 5.5px 8px; border-radius: var(--r); cursor: pointer; transition: background .12s; }
 .f:hover { background: var(--raised); }
@@ -268,6 +276,50 @@ body {
 }
 .pv .meta { font-size: 11px; color: var(--ink-faint); text-align: center; }
 .pv .meta b { color: var(--ink-dim); font-weight: 500; }
+
+/* Gallery */
+.gal { position: absolute; inset: 0; display: flex; flex-direction: column; background: #050608; border-radius: 0 0 6px 6px; overflow: hidden; }
+.gal .stage {
+  flex: 1; position: relative; display: grid; place-items: center;
+  overflow: hidden; min-height: 0;
+}
+.gal .stage img, .gal .stage video {
+  max-width: 100%; max-height: 100%; object-fit: contain; display: block;
+  transition: opacity .16s;
+}
+.gal .stage .miss { color: var(--ink-ghost); font-size: 11px; letter-spacing: .18em; text-transform: uppercase; }
+/* Edge affordances: visible on hover, never covering the image. */
+.gal .nav {
+  position: absolute; top: 0; bottom: 0; width: 22%; border: none; cursor: pointer;
+  background: transparent; color: var(--ink); opacity: 0; transition: opacity .18s;
+  display: grid; place-items: center; font-size: 26px; padding: 0;
+}
+.gal .nav:hover { opacity: 1; }
+.gal .nav.prev { left: 0; background: linear-gradient(90deg, rgba(0,0,0,.5), transparent); }
+.gal .nav.next { right: 0; background: linear-gradient(270deg, rgba(0,0,0,.5), transparent); }
+.gal .hud {
+  display: flex; align-items: center; gap: 10px; padding: 7px 11px;
+  border-top: 1px solid var(--line); background: var(--base); flex: 0 0 auto;
+}
+.gal .hud .nm { color: var(--ink-dim); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gal .hud .ct { color: var(--ink-ghost); font-size: 10.5px; font-variant-numeric: tabular-nums; margin-left: auto; flex: 0 0 auto; }
+.gal .strip {
+  display: flex; gap: 4px; padding: 6px 8px; overflow-x: auto; overflow-y: hidden;
+  border-top: 1px solid var(--line); background: var(--base); flex: 0 0 auto; height: 62px;
+}
+.gal .strip::-webkit-scrollbar { height: 6px; }
+.gal .strip::-webkit-scrollbar-thumb { background: var(--line-hi); border-radius: 6px; }
+.gal .th {
+  flex: 0 0 auto; width: 62px; height: 48px; border-radius: 3px; cursor: pointer;
+  background: #0d1015 center/cover no-repeat; border: 1px solid var(--line);
+  opacity: .5; transition: opacity .15s, border-color .15s; position: relative;
+}
+.gal .th:hover { opacity: .85; }
+.gal .th.on { opacity: 1; border-color: var(--tier); }
+.gal .th.vid::after {
+  content: '▶'; position: absolute; right: 3px; bottom: 1px;
+  font-size: 8px; color: var(--ink); text-shadow: 0 0 3px #000;
+}
 
 /* Terminal */
 .term {
@@ -474,7 +526,8 @@ const ICON = {
   media:   '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M10.5 9.5l4.5 2.5-4.5 2.5z"/>',
   timeline:'<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
   preview: '<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="M4 17l5-4 4 3 3-2 4 3"/>',
-  terminal:'<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9.5l3 2.5-3 2.5M12.5 15h4"/>'
+  terminal:'<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9.5l3 2.5-3 2.5M12.5 15h4"/>',
+  gallery: '<rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="8.5" cy="10" r="1.6"/><path d="M4 16.5l4.5-3.5 3.5 2.5 3-2 5 4"/>'
 };
 const svg = k => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${ICON[k]}</svg>`;
 
@@ -494,7 +547,6 @@ const FS = {
   'Documents': { dirs: [], files: [['rota_september.pdf','840 KB','pdf'],['handover.md','8 KB','txt']] },
   'Prism': { dirs: [], files: [['architecture.md','21 KB','txt'],['Cargo.toml','620 B','txt']] }
 };
-const FICON = { img:'▤', vid:'▶', txt:'≡', pdf:'▦', bin:'◆' };
 
 /* ── window manager ──────────────────────────────────────── */
 let zTop = 10, seq = 0;
@@ -519,7 +571,13 @@ function makeWindow({ id, app, title, meta = '', w = 380, h = 320, x, y, content
        <span class="wbtns"><button class="wb n" title="Minimise"></button><button class="wb m" title="Maximise"></button><button class="wb c" title="Close"></button></span>
      </header>
      <div class="body"></div><div class="rz"></div>`;
-  el.querySelector('.body').append(content);
+  const bodyEl = el.querySelector('.body');
+  if (content.firstElementChild &&
+      (content.firstElementChild.classList.contains('gal') ||
+       content.firstElementChild.classList.contains('xt'))) {
+    bodyEl.classList.add('flush');
+  }
+  bodyEl.append(content);
   desk.append(el);
 
   const win = { id: wid, app, el, restore: null, snapped: false, preSnap: null };
@@ -712,7 +770,20 @@ function appFiles(startRoot, startPath = '') {
       const a = document.createElement('a'); a.textContent = label; a.onclick = go; return a;
     };
     const sep = () => { const x = document.createElement('s'); x.textContent = '/'; return x; };
-    crumb.append(mk(root, () => { path = ''; render(); }));
+
+    if (ROOTS.length > 1) {
+      const sel = document.createElement('select');
+      sel.className = 'rootsel';
+      for (const r of ROOTS) {
+        const o = document.createElement('option');
+        o.value = r.name; o.textContent = r.name; o.selected = r.name === root;
+        sel.append(o);
+      }
+      sel.onchange = () => { root = sel.value; path = ''; render(); };
+      crumb.append(sel);
+    } else {
+      crumb.append(mk(root, () => { path = ''; render(); }));
+    }
     const parts = data.path ? data.path.split('/') : [];
     parts.forEach((p, i) => {
       crumb.append(sep(), mk(p, () => { path = parts.slice(0, i + 1).join('/'); render(); }));
@@ -736,7 +807,16 @@ function appFiles(startRoot, startPath = '') {
           list.querySelectorAll('.f').forEach(f => f.classList.remove('sel'));
           row.classList.add('sel');
         };
-        row.ondblclick = () => openPreview(root, full, e);
+        row.ondblclick = () => {
+          if (VIEWABLE.has(e.kind)) {
+            makeWindow({
+              app: 'gallery', title: 'Gallery', meta: e.name, w: 640, h: 520,
+              content: appGallery(root, data.path, e.name)
+            });
+          } else {
+            openPreview(root, full, e);
+          }
+        };
       }
       list.append(row);
     }
@@ -849,12 +929,129 @@ function appTimeline() {
     </div>`);
 }
 
+/* Gallery — the app the operator singled out.
+   Opening one image loads the whole directory as an implicit group, mixing
+   images and video, so arrow keys walk the folder. No Linux viewer seems to do
+   this properly, and it is exactly the ComfyUI-output case where renders and
+   turntable clips live side by side. */
+const VIEWABLE = new Set(['image', 'video']);
+
+function appGallery(root, dirPath, startName) {
+  const d = el(`<div class="gal">
+      <div class="stage"><span class="miss">loading…</span>
+        <button class="nav prev" title="Previous (←)">‹</button>
+        <button class="nav next" title="Next (→)">›</button>
+      </div>
+      <div class="hud"><span class="nm"></span><span class="ct"></span></div>
+      <div class="strip"></div>
+    </div>`);
+
+  const stage = d.querySelector('.stage');
+  const strip = d.querySelector('.strip');
+  const nameEl = d.querySelector('.nm');
+  const countEl = d.querySelector('.ct');
+  let items = [], i = 0;
+
+  const rawUrl = e => `/api/files/raw?root=${encodeURIComponent(root)}&path=${encodeURIComponent(e.path)}`;
+  const thumbUrl = e => `/api/files/thumb?root=${encodeURIComponent(root)}&path=${encodeURIComponent(e.path)}`;
+
+  function show(n) {
+    if (!items.length) return;
+    // Wrap, so the folder is a loop rather than a dead end at each end.
+    i = (n + items.length) % items.length;
+    const e = items[i];
+
+    stage.querySelectorAll('img,video,.miss').forEach(x => x.remove());
+    const node = document.createElement(e.kind === 'video' ? 'video' : 'img');
+    node.src = rawUrl(e);
+    if (e.kind === 'video') { node.controls = true; node.autoplay = false; }
+    stage.prepend(node);
+
+    nameEl.textContent = e.name;
+    countEl.textContent = `${i + 1} / ${items.length}`;
+    const win = d.closest('.win');
+    if (win) win.querySelector('.meta').textContent = e.name;
+
+    strip.querySelectorAll('.th').forEach((t, k) => t.classList.toggle('on', k === i));
+    const active = strip.children[i];
+    if (active) active.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'smooth' });
+
+    // Prefetch neighbours so arrowing through feels instant.
+    for (const k of [i + 1, i - 1]) {
+      const nb = items[(k + items.length) % items.length];
+      if (nb && nb.kind === 'image') new Image().src = rawUrl(nb);
+    }
+  }
+
+  async function load() {
+    let data;
+    try {
+      data = await API.get(`/api/files/list?root=${encodeURIComponent(root)}&path=${encodeURIComponent(dirPath)}&limit=1000`);
+    } catch (e) {
+      stage.innerHTML = `<span class="miss">${e.message || 'could not read folder'}</span>`;
+      return;
+    }
+
+    items = data.entries
+      .filter(e => !e.is_dir && VIEWABLE.has(e.kind))
+      .map(e => ({ ...e, path: data.path ? `${data.path}/${e.name}` : e.name }));
+
+    if (!items.length) {
+      stage.innerHTML = '<span class="miss">nothing viewable here</span>';
+      return;
+    }
+
+    strip.innerHTML = '';
+    items.forEach((e, k) => {
+      const t = document.createElement('div');
+      t.className = 'th' + (e.kind === 'video' ? ' vid' : '');
+      t.title = e.name;
+      // Thumbnails are lazy: a 569-file folder must not fire 569 requests.
+      t.dataset.url = thumbUrl(e);
+      t.onclick = () => show(k);
+      strip.append(t);
+    });
+
+    const io = new IntersectionObserver(es => {
+      for (const en of es) {
+        if (en.isIntersecting && en.target.dataset.url) {
+          en.target.style.backgroundImage = `url("${en.target.dataset.url}")`;
+          delete en.target.dataset.url;
+          io.unobserve(en.target);
+        }
+      }
+    }, { root: strip, rootMargin: '200px' });
+    strip.querySelectorAll('.th').forEach(t => io.observe(t));
+
+    const start = startName ? items.findIndex(e => e.name === startName) : 0;
+    show(start < 0 ? 0 : start);
+  }
+
+  d.querySelector('.nav.prev').onclick = () => show(i - 1);
+  d.querySelector('.nav.next').onclick = () => show(i + 1);
+
+  // Arrow keys are the whole point, so the window takes focus and keeps it.
+  d.tabIndex = 0;
+  d.addEventListener('keydown', e => {
+    const k = e.key;
+    if (k === 'ArrowRight' || k === ' ' || k === 'PageDown') { show(i + 1); e.preventDefault(); }
+    else if (k === 'ArrowLeft' || k === 'PageUp') { show(i - 1); e.preventDefault(); }
+    else if (k === 'Home') { show(0); e.preventDefault(); }
+    else if (k === 'End') { show(items.length - 1); e.preventDefault(); }
+  });
+  d.addEventListener('pointerdown', () => d.focus());
+  requestAnimationFrame(() => d.focus());
+
+  load();
+  return d;
+}
+
 /* The real terminal: xterm.js bound to a PTY on the host over a WebSocket.
    Closing the window detaches — the session and anything it launched keep
    running. Only Kill destroys, via cgroup.kill. See ADR 0003. */
 function appTerminal(existingId) {
-  const d = el('<div style="height:100%;position:relative"><div class="xt" style="height:100%"></div></div>');
-  const host = d.querySelector('.xt');
+  const d = el('<div class="xt" style="position:absolute;inset:0;padding:8px 4px 4px 8px"></div>');
+  const host = d;
 
   const term = new Terminal({
     fontFamily: 'ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace',
@@ -935,7 +1132,9 @@ const APPS = {
   facets:   { title: 'Facets',   w: 392, h: 286, make: appFacets },
   media:    { title: 'Media',    w: 400, h: 360, make: appMedia },
   timeline: { title: 'Timeline', w: 420, h: 240, make: appTimeline },
-  terminal: { title: 'Terminal', w: 520, h: 320, make: appTerminal, multi: true }
+  gallery:  { title: 'Gallery',  w: 640, h: 520, make: () => appGallery(
+                (ROOTS[0] && ROOTS[0].name) || '', '', null), multi: true },
+  terminal: { title: 'Terminal', w: 560, h: 340, make: appTerminal, multi: true }
 };
 
 function launch(app) {
@@ -949,7 +1148,7 @@ function launch(app) {
 
 /* ── dock ────────────────────────────────────────────────── */
 const dock = $('#dock');
-Object.keys(APPS).forEach(app => {
+['vitals','files','gallery','terminal','facets','media','timeline'].filter(a => APPS[a]).forEach(app => {
   const b = document.createElement('div');
   b.className = 'dockitem'; b.dataset.app = app;
   b.innerHTML = svg(app) + `<span class="run"></span><span class="tip">${APPS[app].title}</span>`;
@@ -1144,6 +1343,20 @@ async function refreshVitals() {
     vitalsPanels.forEach(p => p.isConnected && paintVitals(p));
   } catch (e) { /* auth handled in API.get */ }
 }
+
+/* A deliberate, minimal external surface. Used to drive the shell in tests,
+   and the seam a future deep link (/#files/comfy-output/...) would use. */
+window.prism = {
+  open: (app) => launch(app),
+  openGallery: (root, dir, name) => makeWindow({
+    app: 'gallery', title: 'Gallery', meta: name || dir || root, w: 720, h: 560,
+    content: appGallery(root, dir || '', name || null)
+  }),
+  openFiles: (root, dir) => makeWindow({
+    app: 'files', title: 'Files', w: 430, h: 380, content: appFiles(root, dir || '')
+  }),
+  roots: () => ROOTS
+};
 
 /* ── boot ────────────────────────────────────────────────── */
 let booted = false;

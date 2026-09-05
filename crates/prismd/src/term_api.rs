@@ -289,7 +289,7 @@ pub fn manager_from(cfg: &prism_core::config::TerminalConfig) -> TermConfig {
         shell: cfg
             .shell
             .clone()
-            .unwrap_or_else(|| std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".into())),
+            .unwrap_or_else(prism_core::term::session::login_shell),
         scrollback_bytes: cfg.scrollback_bytes,
         max_sessions: cfg.max_sessions,
         use_scope: cfg.use_scope,

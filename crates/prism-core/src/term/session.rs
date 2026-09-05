@@ -171,11 +171,33 @@ pub struct TermConfig {
     pub use_scope: bool,
 }
 
+/// The account's login shell, from the password database.
+///
+/// Deliberately not `$SHELL`: the daemon inherits that from whatever launched
+/// it, so a service started from a script would hand the operator a different
+/// shell than the one they actually use. `/etc/passwd` is the source of truth.
+pub fn login_shell() -> String {
+    // SAFETY: getpwuid returns a pointer into a static buffer owned by libc; we
+    // copy out of it immediately and never retain it. A null return means no
+    // entry, which is handled.
+    unsafe {
+        let pw = libc::getpwuid(libc::getuid());
+        if !pw.is_null() && !(*pw).pw_shell.is_null() {
+            if let Ok(s) = std::ffi::CStr::from_ptr((*pw).pw_shell).to_str()
+                && !s.is_empty()
+            {
+                return s.to_string();
+            }
+        }
+    }
+    std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into())
+}
+
 impl Default for TermConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            shell: std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".into()),
+            shell: login_shell(),
             scrollback_bytes: super::ring::DEFAULT_CAPACITY,
             // A ceiling on concurrent sessions: each holds a shell, a thread and
             // a scrollback buffer, and an accidental loop opening terminals
@@ -256,8 +278,10 @@ impl SessionManager {
             )
         };
 
+        // `-l` so the shell sources the operator's profile and behaves like the
+        // terminal they normally open, rather than a bare non-login shell.
         let base: Vec<String> = if argv.is_empty() {
-            vec![self.cfg.shell.clone()]
+            vec![self.cfg.shell.clone(), "-l".to_string()]
         } else {
             argv.to_vec()
         };

@@ -26,5 +26,25 @@ if ! unshare --user --pid --fork --mount-proc true 2>/dev/null; then
     exit 1
 fi
 
+# Syntax-check the shell before the Rust tests. A duplicate `const` in an
+# inline script kills the entire IIFE silently — the page renders, nothing
+# works, and no Rust test can see it. Caught exactly that on 2026-09-05.
+if command -v node >/dev/null 2>&1; then
+    python3 - <<'EOF' > /tmp/prism-shell-check.js
+s = open("ui/shell.html").read()
+i = s.rindex("<script>"); j = s.rindex("</script>")
+print(s[i + 8:j])
+EOF
+    if node --check /tmp/prism-shell-check.js; then
+        echo "ui/shell.html: syntax OK"
+    else
+        echo "ui/shell.html: SYNTAX ERROR — refusing to run tests" >&2
+        exit 1
+    fi
+    rm -f /tmp/prism-shell-check.js
+else
+    echo "note: node not found, skipping shell syntax check" >&2
+fi
+
 echo "running tests in an isolated PID namespace"
 exec unshare --user --pid --fork --mount-proc cargo test "$@"
