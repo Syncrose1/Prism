@@ -26,7 +26,7 @@ use crate::api::{AppState, require};
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/facets", get(list).post(create))
-        .route("/api/facets/{id}", axum::routing::delete(remove))
+        .route("/api/facets/{id}", axum::routing::delete(remove).put(update))
         .route("/api/facets/{id}/start", post(start))
         .route("/api/facets/{id}/stop", post(stop))
         .route("/api/facets/{id}/kill", post(kill))
@@ -68,6 +68,9 @@ struct FacetView {
     state: &'static str,
     detail: Option<String>,
     command: String,
+    /// Needed so the editor can round-trip it. Without this the form would
+    /// load an empty working directory and quietly clear it on save.
+    cwd: Option<String>,
     memory_mib: Option<u64>,
     swap_mib: Option<u64>,
     limits: LimitsView,
@@ -154,6 +157,7 @@ fn view(facet: &Facet, sup: &Supervisor) -> FacetView {
         state,
         detail,
         command: facet.command.join(" "),
+        cwd: facet.cwd.as_ref().map(|p| p.display().to_string()),
         // Only meaningful while running; a stopped facet has no cgroup.
         memory_mib: running.then(|| sup.memory_current_kb(&facet.id).map(|kb| kb / 1024)).flatten(),
         swap_mib: running.then(|| sup.memory_swap_kb(&facet.id).map(|kb| kb / 1024)).flatten(),
@@ -342,6 +346,75 @@ async fn create(
 
     info!(facet = %id, "facet added");
     Json(view(&facet, &Supervisor::new())).into_response()
+}
+
+/// Change an existing facet's definition.
+///
+/// The whole point of adopting an app by port is that it can later be taught
+/// how to start itself: discovery finds something already running, and the
+/// operator adds the script that launches it next time. Without this, adopted
+/// apps would be permanently second-class.
+///
+/// A running workload keeps running. The definition describes how to *start*
+/// something, so editing it changes the next launch and nothing about the
+/// current one; stopping a workload to rename it would be a surprising cost.
+/// Live limits have their own endpoint, since those do apply immediately.
+async fn update(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<CreateRequest>,
+) -> Response {
+    if let Some(d) = require(&state, &headers, Sensitivity::Session) {
+        return d;
+    }
+
+    let name = body.name.trim().to_string();
+    if name.is_empty() {
+        return err(StatusCode::BAD_REQUEST, "no_name", "a name is required");
+    }
+    let command = split_command(&body.command);
+    if command.is_empty() && body.expose.is_none() {
+        return err(
+            StatusCode::BAD_REQUEST,
+            "no_command",
+            "a command is required, unless the app is adopted by port",
+        );
+    }
+
+    let updated = {
+        let mut facets = state.facets.write().expect("facets poisoned");
+        let Some(f) = facets.iter_mut().find(|f| f.id == id) else {
+            return err(StatusCode::NOT_FOUND, "no_facet", "no such facet");
+        };
+        f.name = name;
+        f.command = command;
+        f.cwd = body
+            .cwd
+            .as_ref()
+            .filter(|c| !c.trim().is_empty())
+            .map(std::path::PathBuf::from);
+        f.pty = body.pty;
+        f.limits = FacetLimits {
+            memory_high: body.limits.memory_high.clone(),
+            memory_max: body.limits.memory_max.clone(),
+            swap_max: body.limits.swap_max.clone(),
+        };
+        f.expose = body.expose.map(|port| prism_core::config::Expose {
+            port,
+            title: body.title.clone().filter(|t| !t.trim().is_empty()),
+            tls: body.tls,
+            direct: f.expose.as_ref().is_some_and(|e| e.direct),
+        });
+        f.clone()
+    };
+
+    if let Err(e) = persist(&state) {
+        warn!(error = %e, "could not persist edited facet");
+        return err(StatusCode::INTERNAL_SERVER_ERROR, "save_failed", e.to_string());
+    }
+    info!(facet = %id, "facet updated");
+    Json(view(&updated, &Supervisor::new())).into_response()
 }
 
 async fn remove(

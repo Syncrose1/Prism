@@ -375,6 +375,92 @@ body {
 .frameapp .direct .cav { color: var(--ink-ghost); font-size: 11px; max-width: 34ch; }
 .frameapp .direct code { color: var(--ink-faint); }
 
+/* A window on another workspace. Hidden, never detached: a terminal removed
+   from the document loses its scrollback and a video stops. */
+.win.offws { display: none; }
+.dockitem.elsewhere .run { opacity: .45; transform: scaleX(.4); }
+
+/* Launcher */
+#launcher {
+  position: fixed; inset: 0; z-index: 820; display: grid; place-items: center;
+  background: rgba(3,4,6,.55); backdrop-filter: blur(9px);
+  animation: fade .13s ease backwards;
+}
+.lch {
+  width: min(880px, 92vw); height: min(560px, 84vh);
+  display: flex; flex-direction: column;
+  background: rgba(14,17,22,.97); border: 1px solid var(--line-hi);
+  border-radius: 11px; box-shadow: 0 40px 100px -24px rgba(0,0,0,.96);
+  overflow: hidden; animation: lchin .16s cubic-bezier(.2,.8,.3,1) backwards;
+}
+@keyframes lchin { from { opacity: 0; transform: translateY(10px) scale(.985); } }
+.lchsearch {
+  display: flex; align-items: center; gap: 11px; padding: 15px 17px;
+  border-bottom: 1px solid var(--line); flex: none;
+}
+.lchsearch .mag { color: var(--ink-ghost); font-size: 13px; }
+.lchsearch input {
+  flex: 1; background: none; border: 0; outline: none; color: var(--ink);
+  font: inherit; font-size: 14.5px; letter-spacing: .01em;
+}
+.lchsearch input::placeholder { color: var(--ink-ghost); }
+.lchsearch kbd {
+  font-size: 10px; letter-spacing: .12em; text-transform: uppercase;
+  color: var(--ink-ghost); border: 1px solid var(--line-hi);
+  border-radius: 4px; padding: 3px 6px;
+}
+.lchbody { display: flex; flex: 1; min-height: 0; }
+.lchside {
+  width: 244px; flex: none; border-right: 1px solid var(--line);
+  padding: 13px; overflow-y: auto;
+}
+.lchapps { flex: 1; padding: 13px 15px; overflow-y: auto; min-width: 0; }
+.lchhead {
+  font-size: 9.5px; letter-spacing: .22em; text-transform: uppercase;
+  color: var(--ink-ghost); margin: 3px 0 9px;
+}
+.lchside .lchhead:not(:first-child) { margin-top: 17px; }
+
+.wsgrid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 5px; }
+.wstile {
+  position: relative; aspect-ratio: 4/3; border-radius: 5px; cursor: pointer;
+  border: 1px solid var(--line); background: rgba(255,255,255,.022);
+  display: grid; place-items: center; font-size: 11px; color: var(--ink-ghost);
+  font-variant-numeric: tabular-nums; transition: background .12s ease, border-color .12s ease;
+}
+.wstile:hover { background: rgba(255,255,255,.06); border-color: var(--line-hi); }
+.wstile.on { border-color: var(--green); color: var(--ink); background: rgba(74,222,128,.09); }
+/* Occupied but not current: a dot, so a glance finds where things are. */
+.wstile.used::after {
+  content: ''; position: absolute; bottom: 4px; left: 50%; transform: translateX(-50%);
+  width: 3px; height: 3px; border-radius: 50%; background: var(--ink-dim);
+}
+.wstile.on.used::after { background: var(--green); }
+
+.lchsys { display: flex; flex-direction: column; gap: 2px; }
+
+.appgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(94px, 1fr)); gap: 5px; }
+.apptile {
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  padding: 14px 8px 11px; border-radius: 7px; cursor: pointer;
+  border: 1px solid transparent; background: none; color: var(--ink);
+  font: inherit; transition: background .12s ease;
+}
+.apptile:hover, .apptile.sel { background: rgba(255,255,255,.065); border-color: var(--line); }
+.apptile svg { opacity: .85; }
+.apptile .lbl {
+  font-size: 11px; text-align: center; line-height: 1.3; color: var(--ink-dim);
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.apptile:hover .lbl, .apptile.sel .lbl { color: var(--ink); }
+
+/* The launcher button sits apart from the apps it opens. */
+.dockitem.prismbtn { margin-right: 3px; }
+.dockitem.prismbtn::after {
+  content: ''; position: absolute; right: -5px; top: 9px; bottom: 9px;
+  width: 1px; background: var(--line);
+}
+
 /* Toasts */
 .toasts { position: fixed; bottom: 58px; right: 16px; z-index: 900;
   display: flex; flex-direction: column; align-items: flex-end; gap: 7px;
@@ -387,6 +473,26 @@ body {
   animation: toastin .2s ease backwards; max-width: 320px; }
 .toast.bad { border-color: var(--warn); color: var(--warn); }
 @keyframes toastin { from { opacity: 0; transform: translateY(6px); } }
+
+/* Local or cloud */
+.pk.src { height: auto; gap: 13px; width: min(430px, 92vw); }
+.srcopts { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+.srcopt {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 5px;
+  padding: 15px 14px; border-radius: 7px; cursor: pointer; text-align: left;
+  border: 1px solid var(--line); background: rgba(255,255,255,.02);
+  color: var(--ink); font: inherit;
+  transition: background .12s ease, border-color .12s ease;
+}
+.srcopt:hover, .srcopt:focus-visible {
+  background: rgba(255,255,255,.07); border-color: var(--line-hi); outline: none;
+}
+.srcopt:focus-visible { border-color: var(--green); }
+.srcopt .ico { font-size: 15px; color: var(--ink-dim); }
+.srcopt .nm { font-size: 12.5px; }
+.srcopt .sub { font-size: 10.5px; color: var(--ink-ghost); line-height: 1.4; }
+.remember { font-size: 11px; color: var(--ink-ghost); }
+.remember b { color: var(--ink-dim); font-weight: 500; }
 
 /* Host file picker */
 .picker { position: fixed; inset: 0; z-index: 850; display: grid; place-items: center;
@@ -557,7 +663,36 @@ function interceptFilePicker(iframe, facet) {
     }));
   }
 
-  async function fill(input) {
+  /* Answer the app's request for a file.
+     `native` re-runs whatever the app originally called, so choosing "this
+     device" gives exactly the picker it would have had — the interception
+     steps aside rather than approximating the thing it replaced. */
+  async function fill(input, native) {
+    const source = await pickSource(name, SYSTEM.hostname, doc);
+    if (!source) return;                       // cancelled: the app gets nothing
+    if (source === 'local') {
+      // The flag makes the patched methods pass this one call straight
+      // through; cleared immediately so it cannot leak to the next.
+      input.dataset.prismBypass = '1';
+      try {
+        native && native();
+      } catch (e) {
+        // showPicker() requires transient user activation *in the frame that
+        // owns the input*, and the activation here belongs to the shell's
+        // document — the operator clicked a Prism button, not something inside
+        // the app. click() carries no such requirement, so it is the fallback
+        // that actually reaches the device's own picker.
+        try {
+          input.click();
+        } catch (e2) {
+          toast(`This device's file picker could not be opened — ${e2.message || e.message}`, 'bad');
+        }
+      } finally {
+        delete input.dataset.prismBypass;
+      }
+      return;
+    }
+
     const picked = await pickFiles({
       multiple: input.multiple,
       accept: input.accept || ''
@@ -589,21 +724,45 @@ function interceptFilePicker(iframe, facet) {
       : `Sent ${files.length} files to ${name}`);
   }
 
-  // 1. Programmatic click, attached or not.
   const proto = win.HTMLInputElement.prototype;
+
+  // 1. showPicker(), which is what a modern app actually calls. ComfyUI's own
+  //    helper reads `typeof el.showPicker === 'function' ? el.showPicker()
+  //    : el.click()`, so on Chrome the click path is never taken — patching
+  //    only click looked correct and intercepted nothing.
+  const nativeShowPicker = proto.showPicker;
+  if (typeof nativeShowPicker === 'function') {
+    proto.showPicker = function () {
+      if (this.type === 'file' && !this.dataset.prismBypass) {
+        fill(this, () => nativeShowPicker.call(this));
+        return;
+      }
+      return nativeShowPicker.apply(this, arguments);
+    };
+  }
+
+  // 2. Programmatic click, attached or not. A detached element's event path
+  //    is the element alone, so a document listener never sees this one.
   const nativeClick = proto.click;
   proto.click = function () {
     if (this.type === 'file' && !this.dataset.prismBypass) {
-      fill(this);
+      fill(this, () => nativeClick.call(this));
       return;
     }
     return nativeClick.apply(this, arguments);
   };
 
-  // 2. File System Access API. The page expects handles rather than files, so
+  // 3. File System Access API. The page expects handles rather than files, so
   //    return the small part of that interface anyone actually calls.
   if (typeof win.showOpenFilePicker === 'function') {
+    const nativeOpenPicker = win.showOpenFilePicker;
     win.showOpenFilePicker = async (opts = {}) => {
+      const source = await pickSource(name, SYSTEM.hostname, doc);
+      if (!source) {
+        throw new win.DOMException('The user aborted a request.', 'AbortError');
+      }
+      if (source === 'local') return nativeOpenPicker.call(win, opts);
+
       const accept = (opts.types || [])
         .flatMap(t => Object.values(t.accept || {}).flat())
         .join(',');
@@ -624,15 +783,37 @@ function interceptFilePicker(iframe, facet) {
     };
   }
 
-  // 3. A real click on an input that is in the document.
+  // 4. A real click on an input that is in the document.
   doc.addEventListener('click', ev => {
     const input = ev.target;
     if (!(input instanceof win.HTMLInputElement) || input.type !== 'file') return;
     if (input.dataset.prismBypass) return;
     ev.preventDefault();
     ev.stopPropagation();
-    fill(input);
+    // A real click was swallowed, so the fallback is a synthetic one.
+    fill(input, () => nativeClick.call(input));
   }, true);
+}
+
+/* Keep a proxied frame patched for as long as it exists.
+   A same-origin navigation replaces the frame's global object, taking the
+   patched prototypes with it. `load` covers the ordinary case, but a
+   single-page app that swaps documents without one — or a frame that is still
+   `about:blank` when load fires — would end up unpatched and silently fall
+   back to the client's file picker. Re-applying is idempotent and costs a
+   property read, so it is checked rather than assumed. */
+function keepPatched(iframe, facet) {
+  const tick = () => {
+    if (!iframe.isConnected) return false;
+    try {
+      const w = iframe.contentWindow;
+      if (w && !w.__prismPicker && iframe.contentDocument) {
+        interceptFilePicker(iframe, facet);
+      }
+    } catch { /* cross-origin: nothing to do, and not an error */ }
+    return true;
+  };
+  const timer = setInterval(() => { if (!tick()) clearInterval(timer); }, 1000);
 }
 
 /* Facets */
@@ -768,7 +949,25 @@ function interceptFilePicker(iframe, facet) {
   <div class="clock" id="clock">00:00:00</div>
 </div>
 
-<div id="sysmenupanel" hidden></div>
+<div id="launcher" hidden><div class="lch">
+  <div class="lchsearch">
+    <span class="mag">◌</span>
+    <input id="lchInput" placeholder="Search apps" autocomplete="off" spellcheck="false">
+    <kbd>Alt</kbd>
+  </div>
+  <div class="lchbody">
+    <div class="lchside">
+      <div class="lchhead">Workspaces</div>
+      <div class="wsgrid" id="wsGrid"></div>
+      <div class="lchhead">System</div>
+      <div class="lchsys" id="lchSys"></div>
+    </div>
+    <div class="lchapps">
+      <div class="lchhead">Applications</div>
+      <div class="appgrid" id="appGrid"></div>
+    </div>
+  </div>
+</div></div>
 
 <main id="desk">
   <div id="deskbg"></div>
@@ -845,7 +1044,12 @@ const ICON = {
   preview: '<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="M4 17l5-4 4 3 3-2 4 3"/>',
   terminal:'<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9.5l3 2.5-3 2.5M12.5 15h4"/>',
   gallery: '<rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="8.5" cy="10" r="1.6"/><path d="M4 16.5l4.5-3.5 3.5 2.5 3-2 5 4"/>',
-  app:     '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M7 6.5h.01M9.5 6.5h.01"/>'
+  app:     '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M7 6.5h.01M9.5 6.5h.01"/>',
+  settings:'<circle cx="12" cy="12" r="3.2"/><path d="M12 3v2.2M12 18.8V21M3 12h2.2M18.8 12H21M5.6 5.6l1.6 1.6M16.8 16.8l1.6 1.6M18.4 5.6l-1.6 1.6M7.2 16.8l-1.6 1.6"/>',
+  // The mark itself: a beam entering a prism and leaving as three bands —
+  // the same figure as the topbar logo, which is what makes it recognisable
+  // as the button that opens everything.
+  prism:   '<path d="M2 11h5.5"/><path d="M8 17L13 6l5 11z"/><path d="M18.5 12.6H22M18.5 14.4H22M18.5 16.2H22"/>'
 };
 const svg = k => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${ICON[k]}</svg>`;
 
@@ -868,7 +1072,44 @@ const FS = {
 
 /* ── window manager ──────────────────────────────────────── */
 let zTop = 10, seq = 0;
+/* Ten workspaces, because a cloud desktop reached from a laptop has less
+   screen than the machine it is driving, and stacking every window on one
+   plane is how that screen runs out. Windows carry their workspace rather
+   than workspaces carrying lists of windows: there is then only one place a
+   window can be, and no way for the two structures to disagree. */
+const WS_COUNT = 10;
+let CURRENT_WS = 1;
+
 const wins = new Map();
+
+/* Show the windows belonging to the current workspace and hide the rest.
+   Hidden rather than detached: a terminal removed from the document would
+   lose its scrollback and a video would stop, and switching away from a
+   workspace is not a request to interrupt what is on it. */
+function applyWorkspace() {
+  wins.forEach(w => w.el.classList.toggle('offws', (w.ws || 1) !== CURRENT_WS));
+  document.body.dataset.ws = CURRENT_WS;
+  syncDock();
+}
+
+function gotoWorkspace(n) {
+  n = Math.max(1, Math.min(WS_COUNT, n | 0));
+  if (n === CURRENT_WS) return;
+  CURRENT_WS = n;
+  applyWorkspace();
+  // Focus something on the new workspace, or the desktop keeps keyboard
+  // focus on a window nobody can see.
+  const here = [...wins.values()].filter(w => (w.ws || 1) === n && !w.el.classList.contains('min'));
+  if (here.length) focus(here[here.length - 1]);
+  scheduleSave();
+}
+
+function sendToWorkspace(win, n) {
+  n = Math.max(1, Math.min(WS_COUNT, n | 0));
+  win.ws = n;
+  applyWorkspace();
+  scheduleSave();
+}
 
 function makeWindow({ id, app, title, meta = '', w = 380, h = 320, x, y, args, content }) {
   const wid = id || `${app}-${++seq}`;
@@ -902,7 +1143,7 @@ function makeWindow({ id, app, title, meta = '', w = 380, h = 320, x, y, args, c
   bodyEl.append(content);
   desk.append(el);
 
-  const win = { id: wid, app, el, args, restore: null, snapped: false, preSnap: null };
+  const win = { id: wid, app, el, args, ws: CURRENT_WS, restore: null, snapped: false, preSnap: null };
   wins.set(wid, win);
   wire(win);
   focus(win);
@@ -912,6 +1153,12 @@ function makeWindow({ id, app, title, meta = '', w = 380, h = 320, x, y, args, c
 }
 
 function focus(win) {
+  // Following a window is more useful than refusing to show it: the dock and
+  // the launcher both offer windows that may be elsewhere.
+  if ((win.ws || 1) !== CURRENT_WS) {
+    CURRENT_WS = win.ws || 1;
+    applyWorkspace();
+  }
   wins.forEach(w => w.el.classList.remove('focus'));
   win.el.classList.add('focus');
   win.el.classList.remove('min');
@@ -1486,6 +1733,7 @@ function appFacets() {
       if (running) {
         acts.append(btn('Stop', '', () => act(f.id, 'stop')));
         acts.append(btn('Kill', 'danger', () => act(f.id, 'kill')));
+        acts.append(btn('Edit', '', () => editFacet(f, () => render())));
       } else if (foreign) {
         // Every control here would fail: Stop and Kill have no unit to act on,
         // Start would collide on the port, Limits have no cgroup to write to.
@@ -1494,11 +1742,14 @@ function appFacets() {
         if (f.expose) {
           acts.append(btn(`Open ${f.expose.title}`, '', () => launch('proxy:' + f.id)));
         }
+        // The point of adopting by port: teach it how to start itself later.
+        acts.append(btn('Edit', '', () => editFacet(f, () => render())));
       } else {
         const start = btn(f.pty ? 'Launch' : 'Start', '', () => act(f.id, 'start'));
         start.disabled = !f.available;
         if (!f.available) start.style.opacity = '.4';
         acts.append(start);
+        acts.append(btn('Edit', '', () => editFacet(f, () => render())));
       }
       if (!foreign) acts.append(btn('Limits', '', () => editLimits(f, () => render())));
       if (!running && !foreign) {
@@ -1537,44 +1788,96 @@ function appFacets() {
 /* Define a new facet from the UI. It is written back into the operator's own
    profile.toml, so a script added here is one they can also read, edit by hand,
    and copy to another machine. */
-function newFacet(done) {
+/* One form for both adding and editing.
+   A facet is a command, a port, or both. Discovery adopts apps by port alone,
+   and this is where such an app is later taught how to start itself — without
+   it, an adopted app would be permanently second-class. */
+function facetForm(done, existing) {
+  const editing = !!existing;
+  const e = existing || {};
   const content = el(`<div class="limits">
       <label>Name <input name="name" placeholder="ComfyUI"></label>
       <label>Command <input name="command" placeholder="/path/to/run.sh --flag"></label>
       <label>Working directory <input name="cwd" placeholder="optional"></label>
+      <label>Web port <input name="port" inputmode="numeric" placeholder="optional, e.g. 8188"></label>
+      <label class="chk"><input type="checkbox" name="tls">
+        The app serves HTTPS on that port</label>
       <label class="chk"><input type="checkbox" name="pty">
         Interactive — opens a terminal so prompts can be answered</label>
       <label>Memory max <input name="memory_max" placeholder="optional, e.g. 26G"></label>
       <label>Swap max <input name="swap_max" placeholder="optional, e.g. 6G"></label>
-      <p class="note-line">Quoted paths are handled. This is not a shell: no
-        pipes, globbing or substitution.</p>
-      <div class="acts"><button class="btn create">Add</button></div>
+      <p class="note-line">Give a command to make it launchable, a port to
+        make it a window, or both. Quoted paths are handled; this is not a
+        shell, so no pipes, globbing or substitution.</p>
+      <div class="acts"><button class="btn create"></button></div>
     </div>`);
-  const win = makeWindow({ app: 'newfacet', title: 'Add script', w: 360, h: 420, content });
-  const val = n => content.querySelector(`[name=${n}]`).value.trim();
 
-  content.querySelector('.create').onclick = async () => {
+  const field = n => content.querySelector(`[name=${n}]`);
+  const val = n => field(n).value.trim();
+
+  if (editing) {
+    field('name').value = e.name || '';
+    field('command').value = e.command || '';
+    field('cwd').value = e.cwd || '';
+    field('port').value = e.expose ? e.expose.port : '';
+    field('tls').checked = !!(e.expose && e.expose.tls);
+    field('pty').checked = !!e.pty;
+    field('memory_max').value = e.limits?.memory_max || '';
+    field('swap_max').value = e.limits?.swap_max || '';
+  }
+
+  const btn = content.querySelector('.create');
+  btn.textContent = editing ? 'Save' : 'Add';
+
+  const win = makeWindow({
+    app: 'newfacet',
+    title: editing ? `Edit ${e.name}` : 'Add script',
+    w: 360, h: 470, content
+  });
+
+  btn.onclick = async () => {
+    const port = val('port');
+    // An unparseable port would otherwise be dropped in silence, and the app
+    // would simply never appear as a window.
+    if (port && !/^\d{1,5}$/.test(port)) {
+      alert('Port must be a number between 1 and 65535.');
+      return;
+    }
+    const body = {
+      name: val('name'),
+      command: val('command'),
+      cwd: val('cwd') || null,
+      pty: field('pty').checked,
+      expose: port ? Number(port) : null,
+      tls: field('tls').checked,
+      title: val('name') || null,
+      limits: {
+        memory_high: null,
+        memory_max: val('memory_max') || null,
+        swap_max: val('swap_max') || null
+      }
+    };
     try {
-      await API.post('/api/facets', {
-        name: val('name'),
-        command: val('command'),
-        cwd: val('cwd') || null,
-        pty: content.querySelector('[name=pty]').checked,
-        limits: {
-          memory_high: null,
-          memory_max: val('memory_max') || null,
-          swap_max: val('swap_max') || null
-        }
-      });
+      if (editing) {
+        await API.put(`/api/facets/${encodeURIComponent(e.id)}`, body);
+      } else {
+        await API.post('/api/facets', body);
+      }
       close(win);
+      // A changed port means a different window; refresh what the dock offers.
+      await loadProxied();
+      toast(editing ? `${body.name} saved` : `${body.name} added`);
       done && done();
-    } catch (e) {
-      alert(e.message || 'could not add');
+    } catch (err) {
+      alert(err.message || (editing ? 'could not save' : 'could not add'));
     }
   };
-  setTimeout(() => content.querySelector('[name=name]').focus(), 60);
+  setTimeout(() => field('name').focus(), 60);
   return win;
 }
+
+const newFacet = done => facetForm(done, null);
+const editFacet = (facet, done) => facetForm(done, facet);
 
 /* Live limit adjustment — the "drag a slider from London" requirement. Applied
    to the running cgroup, so a misbehaving workload can be throttled instead of
@@ -1844,6 +2147,7 @@ function appProxy(facet) {
     f.src = `/facet/${encodeURIComponent(facet.id)}/`;
     f.setAttribute('allow', 'clipboard-read; clipboard-write; fullscreen');
     f.addEventListener('load', () => interceptFilePicker(f, facet));
+    keepPatched(f, facet);
     host.append(f);
   }
 
@@ -1902,6 +2206,124 @@ function appProxy(facet) {
 
   probe();
   return d;
+}
+
+/* Which machine's files does the app want?
+   Interception is only an improvement when it is not a hijack. An app asking
+   for a file sometimes wants one from the device in your hands — a photo just
+   taken on a phone — and sometimes one from the machine it is running on,
+   which is the case Prism exists for and the one the browser cannot offer.
+   Only the operator knows which, so ask.
+
+   The preference is remembered per app on this device, deliberately: the right
+   answer on a phone is not the right answer on a laptop, so this is one of the
+   few settings that should *not* follow the operator between devices. */
+const PICK_PREF = 'prism.pickfrom.';
+
+function pickSource(facetName, hostName, doc) {
+  const remembered = (() => {
+    try { return localStorage.getItem(PICK_PREF + facetName); } catch { return null; }
+  })();
+  if (remembered === 'cloud' || remembered === 'local') return Promise.resolve(remembered);
+
+  /* Rendered into the *app's* document, not the shell's.
+     Chrome will only open a file dialog for a frame that has been clicked in,
+     and "this device" must reach the real dialog. A chooser drawn over the
+     iframe from outside looks identical and leaves the frame without a
+     gesture, so the browser silently ignores the call — no error, no picker.
+     Being inside the frame is what makes the fallback work at all. */
+  const d = doc || document;
+  return new Promise(resolve => {
+    const wrap = d.createElement('div');
+    wrap.className = 'prism-srcpick';
+    // Inline styles: the app's stylesheet is not ours and may not be loaded.
+    wrap.style.cssText = [
+      'position:fixed', 'inset:0', 'z-index:2147483647', 'display:grid',
+      'place-items:center', 'background:rgba(3,4,6,.62)',
+      '-webkit-backdrop-filter:blur(6px)', 'backdrop-filter:blur(6px)',
+      'font:13px ui-sans-serif,system-ui,sans-serif', 'color:#e8ebf0'
+    ].join(';');
+
+    const card = d.createElement('div');
+    card.style.cssText = [
+      'width:min(430px,92vw)', 'padding:16px', 'border-radius:9px',
+      'background:#101319', 'border:1px solid #2c313d',
+      'box-shadow:0 30px 80px -20px rgba(0,0,0,.95)',
+      'display:flex', 'flex-direction:column', 'gap:13px'
+    ].join(';');
+
+    const head = d.createElement('div');
+    head.textContent = 'Choose a file from';
+    head.style.cssText = 'font-size:10.5px;letter-spacing:.2em;text-transform:uppercase;color:#6b7382';
+    card.append(head);
+
+    const opts = d.createElement('div');
+    opts.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:9px';
+
+    const mk = (glyph, title, sub) => {
+      const btn = d.createElement('button');
+      btn.type = 'button';
+      btn.style.cssText = [
+        'display:flex', 'flex-direction:column', 'align-items:flex-start', 'gap:5px',
+        'padding:15px 14px', 'border-radius:7px', 'cursor:pointer', 'text-align:left',
+        'border:1px solid #1c2029', 'background:rgba(255,255,255,.025)',
+        'color:#e8ebf0', 'font:inherit'
+      ].join(';');
+      btn.innerHTML = '<span style="font-size:15px;color:#9aa3b2"></span>'
+        + '<span style="font-size:12.5px"></span>'
+        + '<span style="font-size:10.5px;color:#6b7382;line-height:1.4"></span>';
+      const [g, t, sb] = btn.children;
+      g.textContent = glyph; t.textContent = title; sb.textContent = sub;
+      btn.onmouseenter = () => { btn.style.background = 'rgba(255,255,255,.075)'; btn.style.borderColor = '#2c313d'; };
+      btn.onmouseleave = () => { btn.style.background = 'rgba(255,255,255,.025)'; btn.style.borderColor = '#1c2029'; };
+      btn.onfocus = () => { btn.style.borderColor = '#4ade80'; };
+      btn.onblur = () => { btn.style.borderColor = '#1c2029'; };
+      return btn;
+    };
+
+    const cloud = mk('\u25a4', hostName || 'This machine',
+      'files on the machine this app runs on');
+    const local = mk('\u25a3', 'This device', 'your own file picker, as usual');
+    opts.append(cloud, local);
+    card.append(opts);
+
+    const lab = d.createElement('label');
+    lab.style.cssText = 'display:flex;align-items:center;gap:7px;font-size:11px;color:#6b7382;cursor:pointer';
+    const cb = d.createElement('input');
+    cb.type = 'checkbox';
+    lab.append(cb, d.createTextNode(`Remember for ${facetName} on this device`));
+    card.append(lab);
+
+    wrap.append(card);
+    d.body.append(wrap);
+
+    let settled = false;
+    const done = choice => {
+      if (settled) return;
+      settled = true;
+      if (choice && cb.checked) {
+        try { localStorage.setItem(PICK_PREF + facetName, choice); } catch {}
+      }
+      wrap.remove();
+      resolve(choice);
+    };
+    // Resolved synchronously inside the click, so the frame's activation is
+    // still live when the caller reaches the native picker.
+    cloud.onclick = () => done('cloud');
+    local.onclick = () => done('local');
+    wrap.addEventListener('click', e => { if (e.target === wrap) done(null); });
+    wrap.addEventListener('keydown', e => { if (e.key === 'Escape') done(null); });
+    setTimeout(() => cloud.focus(), 40);
+  });
+}
+
+/* Forget every remembered choice, for the Settings pane. */
+function clearPickPrefs() {
+  try {
+    Object.keys(localStorage)
+      .filter(k => k.startsWith(PICK_PREF))
+      .forEach(k => localStorage.removeItem(k));
+  } catch {}
 }
 
 /* Choose a file from the host, not from this device.
@@ -2388,6 +2810,7 @@ function appSettings() {
 
   const PANES = {
     apps: { title: 'Apps', render: paneApps },
+    files: { title: 'Files', render: paneFiles },
     about: { title: 'About', render: paneAbout }
   };
   let current = 'apps';
@@ -2497,6 +2920,22 @@ function paneRefresh(pane) {
   paneApps(pane);
 }
 
+function paneFiles(pane) {
+  const note = document.createElement('p');
+  note.className = 'pnote';
+  note.textContent = 'When an app asks for a file, Prism offers a choice between '
+    + 'this machine and the device you are using. Choices you asked to be '
+    + 'remembered are stored on this device only, since the right answer on a '
+    + 'phone is not the right answer on a laptop.';
+  pane.append(note);
+
+  const b = document.createElement('button');
+  b.className = 'btn';
+  b.textContent = 'Ask again every time';
+  b.onclick = () => { clearPickPrefs(); toast('Remembered choices cleared'); };
+  pane.append(b);
+}
+
 function paneAbout(pane) {
   const dl = document.createElement('dl');
   dl.className = 'kv';
@@ -2538,6 +2977,13 @@ function renderDock() {
     dock.append(b);
   };
 
+  // The launcher sits at the left, apart from the apps it opens.
+  const pb = document.createElement('div');
+  pb.className = 'dockitem prismbtn';
+  pb.innerHTML = svg('prism') + '<span class="tip">Launcher &nbsp;Alt</span>';
+  pb.onclick = () => (launcherOpen() ? closeLauncher() : openLauncher());
+  dock.append(pb);
+
   native.forEach(add);
   if (proxied.length) {
     const sep = document.createElement('div');
@@ -2551,11 +2997,154 @@ renderDock();
 
 function syncDock() {
   dock.querySelectorAll('.dockitem').forEach(b => {
-    const open = [...wins.values()].filter(w => w.app === b.dataset.app);
-    b.classList.toggle('running', open.length > 0);
-    b.classList.toggle('focused', open.some(w => w.el.classList.contains('focus') && !w.el.classList.contains('min')));
+    if (!b.dataset.app) return;                       // the launcher button
+    const all = [...wins.values()].filter(w => w.app === b.dataset.app);
+    const here = all.filter(w => (w.ws || 1) === CURRENT_WS);
+    b.classList.toggle('running', here.length > 0);
+    // Open, but on another workspace. Worth distinguishing: without it the
+    // dock says an app is closed while clicking it jumps somewhere else.
+    b.classList.toggle('elsewhere', here.length === 0 && all.length > 0);
+    b.classList.toggle('focused', here.some(w => w.el.classList.contains('focus') && !w.el.classList.contains('min')));
   });
 }
+
+/* ── launcher ────────────────────────────────────────────
+   One surface for the two things a desktop is asked for constantly: which
+   workspace am I on, and what do I want open. Bound to Alt because that is
+   where the muscle memory already is — the meta key on the machine this
+   drives. Search takes focus on open, so the gesture is press-and-type. */
+const lch = $('#launcher'), lchInput = $('#lchInput');
+const wsGrid = $('#wsGrid'), appGrid = $('#appGrid'), lchSys = $('#lchSys');
+let lchSel = 0;
+
+function launcherOpen() { return !lch.hidden; }
+
+function openLauncher() {
+  lch.hidden = false;
+  lchInput.value = '';
+  lchSel = 0;
+  paintWorkspaces();
+  paintSystem();
+  paintApps('');
+  lchInput.focus();
+}
+
+function closeLauncher() { lch.hidden = true; }
+
+function paintWorkspaces() {
+  wsGrid.innerHTML = '';
+  for (let n = 1; n <= WS_COUNT; n++) {
+    const count = [...wins.values()].filter(w => (w.ws || 1) === n).length;
+    const t = document.createElement('button');
+    t.className = 'wstile' + (n === CURRENT_WS ? ' on' : '') + (count ? ' used' : '');
+    t.textContent = n === 10 ? '0' : String(n);
+    t.title = count
+      ? `${count} window${count > 1 ? 's' : ''} — shift-click to send the focused window here`
+      : 'empty — shift-click to send the focused window here';
+    t.onclick = e => {
+      // Shift sends rather than follows: moving a window and going to look at
+      // it are different intentions, and one gesture cannot mean both.
+      if (e.shiftKey) {
+        const f = [...wins.values()].find(w => w.el.classList.contains('focus'));
+        if (f) { sendToWorkspace(f, n); paintWorkspaces(); toast(`Moved to workspace ${n}`); return; }
+      }
+      gotoWorkspace(n);
+      closeLauncher();
+    };
+    wsGrid.append(t);
+  }
+}
+
+function paintSystem() {
+  lchSys.innerHTML = '';
+  const item = (glyph, label, fn) => {
+    const b = document.createElement('button');
+    b.className = 'mi';
+    b.innerHTML = `<span class="g">${glyph}</span><span class="l"></span>`;
+    b.querySelector('.l').textContent = label;
+    b.onclick = () => { closeLauncher(); fn(); };
+    lchSys.append(b);
+  };
+  item('\u25a4', 'Settings', () => launch('settings'));
+  item('\u25ce', 'Search everything', () => openPal());
+  item('\u25a0', 'Lock this device', () => {
+    fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' })
+      .catch(() => {})
+      .finally(() => location.reload());
+  });
+}
+
+function launcherApps(query) {
+  const q = query.trim().toLowerCase();
+  return Object.entries(APPS)
+    .filter(([, a]) => !q || a.title.toLowerCase().includes(q))
+    .sort((a, b) => a[1].title.localeCompare(b[1].title));
+}
+
+function paintApps(query) {
+  const found = launcherApps(query);
+  appGrid.innerHTML = '';
+  if (!found.length) {
+    const e = document.createElement('div');
+    e.className = 'empty';
+    e.textContent = 'no app by that name';
+    appGrid.append(e);
+    return;
+  }
+  lchSel = Math.min(lchSel, found.length - 1);
+  found.forEach(([key, a], i) => {
+    const t = document.createElement('button');
+    t.className = 'apptile' + (i === lchSel ? ' sel' : '');
+    t.innerHTML = svg(key.startsWith('proxy:') ? 'app' : key) + '<span class="lbl"></span>';
+    t.querySelector('.lbl').textContent = a.title;
+    t.onclick = () => { closeLauncher(); launch(key); };
+    appGrid.append(t);
+  });
+}
+
+lchInput.addEventListener('input', () => { lchSel = 0; paintApps(lchInput.value); });
+lchInput.addEventListener('keydown', e => {
+  const found = launcherApps(lchInput.value);
+  if (e.key === 'Enter' && found[lchSel]) {
+    e.preventDefault();
+    closeLauncher();
+    launch(found[lchSel][0]);
+    return;
+  }
+  const cols = Math.max(1, Math.floor(appGrid.clientWidth / 99));
+  const step = { ArrowRight: 1, ArrowLeft: -1, ArrowDown: cols, ArrowUp: -cols }[e.key];
+  if (step && found.length) {
+    e.preventDefault();
+    lchSel = Math.max(0, Math.min(found.length - 1, lchSel + step));
+    paintApps(lchInput.value);
+    appGrid.children[lchSel]?.scrollIntoView({ block: 'nearest' });
+  }
+  if (e.key === 'Escape') { e.preventDefault(); closeLauncher(); }
+  e.stopPropagation();
+});
+lch.addEventListener('click', e => { if (e.target === lch) closeLauncher(); });
+
+/* Alt alone opens it, in the manner of a meta key: held with anything else it
+   is still a modifier, so the toggle only fires when Alt was pressed and
+   released without another key or a pointer in between. */
+let altAlone = false;
+window.addEventListener('keydown', e => {
+  if (e.key === 'Alt' && !e.repeat) { altAlone = true; return; }
+  altAlone = false;
+}, true);
+window.addEventListener('mousedown', () => { altAlone = false; }, true);
+window.addEventListener('keyup', e => {
+  if (e.key !== 'Alt') return;
+  if (!altAlone) return;
+  altAlone = false;
+  e.preventDefault();
+  launcherOpen() ? closeLauncher() : openLauncher();
+}, true);
+// Alt is a menu-bar accelerator in some browsers; suppress that only for the
+// bare press, so Alt-combinations keep working.
+window.addEventListener('keydown', e => {
+  if (e.key === 'Alt') e.preventDefault();
+});
 
 /* ── command palette ─────────────────────────────────────── */
 const pal = $('#palette'), palInput = $('#palInput'), palList = $('#palList');
@@ -2656,6 +3245,16 @@ const API = {
   async post(url, body) {
     const r = await fetch(url, {
       method: 'POST', credentials: 'same-origin',
+      headers: { 'content-type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body)
+    });
+    if (r.status === 401 || r.status === 403) { showLogin(); throw new Error('auth'); }
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+    return r.status === 204 ? null : r.json();
+  },
+  async put(url, body) {
+    const r = await fetch(url, {
+      method: 'PUT', credentials: 'same-origin',
       headers: { 'content-type': 'application/json' },
       body: body === undefined ? undefined : JSON.stringify(body)
     });
@@ -2809,11 +3408,13 @@ let saveTimer = null;
 function snapshot() {
   return {
     v: 1,
+    ws: CURRENT_WS,
     windows: [...wins.values()]
       .filter(w => isSaveable(w.app))
       .map(w => ({
         app: w.app,
         args: w.args || null,
+        ws: w.ws || 1,
         x: parseInt(w.el.style.left) || 0,
         y: parseInt(w.el.style.top) || 0,
         w: parseInt(w.el.style.width) || 400,
@@ -2868,12 +3469,14 @@ async function restore() {
         content: a.make(w.args)
       });
       win.args = w.args;
+      win.ws = w.ws || 1;
       win.el.style.zIndex = w.z;
       if (w.min) win.el.classList.add('min');
       if (w.max) win.el.classList.add('max');
     } catch {}
   }
-  syncDock();
+  CURRENT_WS = Math.max(1, Math.min(WS_COUNT, state.ws || 1));
+  applyWorkspace();
   restoring = false;
   return true;
 }
