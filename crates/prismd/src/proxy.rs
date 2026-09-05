@@ -285,6 +285,10 @@ async fn proxy(
         parts.headers.insert(header::LOCATION, header_value);
     }
 
+    // Cookies the app sets need adjusting for the fact that it is being served
+    // from somewhere other than where it thinks.
+    rewrite_cookies(&mut parts.headers, &prefix);
+
     let is_html = parts
         .headers
         .get(header::CONTENT_TYPE)
@@ -305,6 +309,93 @@ async fn proxy(
     parts.headers.remove(header::CONTENT_LENGTH);
     debug!(facet = %id, "injected base href");
     Response::from_parts(parts, Body::from(rewritten))
+}
+
+/// Adjust `Set-Cookie` headers for the proxy.
+///
+/// Two problems, both of which silently break a login and leave the user back
+/// at the login page with no error — which is exactly what it looks like when
+/// this is wrong.
+///
+/// **`Secure`.** An app reached over HTTPS sets `Secure` on its session cookie.
+/// Prism serves over plain HTTP on the tailnet, so the browser discards it: the
+/// login succeeds, the cookie never lands, and the next request is
+/// unauthenticated. The flag is dropped when Prism itself is not on HTTPS.
+/// Nothing is lost by doing so — the cookie is already travelling over a
+/// connection whose confidentiality comes from the tailnet rather than TLS.
+///
+/// **`Path`.** A cookie scoped to `/rest` would never be sent to
+/// `/facet/<id>/rest`. Paths are moved under the prefix so they still match.
+fn rewrite_cookies(headers: &mut axum::http::HeaderMap, prefix: &str) {
+    let cookies: Vec<String> = headers
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .filter_map(|v| v.to_str().ok().map(str::to_string))
+        .collect();
+    if cookies.is_empty() {
+        return;
+    }
+
+    headers.remove(header::SET_COOKIE);
+    for cookie in cookies {
+        let rewritten = rewrite_cookie(&cookie, prefix);
+        if let Ok(value) = HeaderValue::from_str(&rewritten) {
+            headers.append(header::SET_COOKIE, value);
+        }
+    }
+}
+
+fn rewrite_cookie(cookie: &str, prefix: &str) -> String {
+    let mut out: Vec<String> = Vec::new();
+    let mut saw_path = false;
+
+    for (i, part) in cookie.split(';').enumerate() {
+        let trimmed = part.trim();
+        if i == 0 {
+            out.push(trimmed.to_string()); // name=value
+            continue;
+        }
+        let lower = trimmed.to_lowercase();
+
+        // Prism is not on HTTPS, so a Secure cookie would simply be discarded.
+        if lower == "secure" {
+            continue;
+        }
+
+        if lower.starts_with("path=") {
+            saw_path = true;
+            // Sliced from the original rather than the lowercased copy: a path
+            // is case-sensitive.
+            let path = trimmed["path=".len()..].trim();
+            // No trailing slash: per RFC 6265 a cookie-path of
+            // `/facet/app/` does not match a request for `/facet/app`, while
+            // `/facet/app` matches both it and everything beneath.
+            let scoped = if path.starts_with(prefix) {
+                path.to_string()
+            } else if path == "/" || path.is_empty() {
+                prefix.to_string()
+            } else if path.starts_with('/') {
+                format!("{prefix}{path}")
+            } else {
+                // A relative path is not something a cookie should carry;
+                // scope it to the app rather than guess.
+                prefix.to_string()
+            };
+            out.push(format!("Path={scoped}"));
+            continue;
+        }
+
+        out.push(trimmed.to_string());
+    }
+
+    // Without an explicit Path a cookie defaults to the *directory* of the
+    // request, which for a deep API call is narrower than the app expects.
+    // Scoping it to the prefix restores the app's own assumption of "site-wide".
+    if !saw_path {
+        out.push(format!("Path={prefix}"));
+    }
+
+    out.join("; ")
 }
 
 /// Bring a `Location` header back under the proxy prefix.
@@ -484,6 +575,76 @@ mod tests {
         // mistaken call is harmless.
         let png = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR";
         assert_eq!(inject_base(png, "/facet/app"), png.to_vec());
+    }
+
+    #[test]
+    fn secure_is_dropped_because_prism_is_not_on_https() {
+        // The exact failure this fixes: the browser silently discards a Secure
+        // cookie on a plain-HTTP origin, so the login succeeds and the next
+        // request is unauthenticated — which looks like the login page
+        // reloading with no error.
+        let out = rewrite_cookie("session=abc; Path=/; Secure; HttpOnly", "/facet/app");
+        assert!(!out.to_lowercase().contains("secure"), "got {out}");
+        assert!(out.contains("HttpOnly"), "unrelated flags must survive: {out}");
+    }
+
+    #[test]
+    fn a_scoped_path_has_no_trailing_slash() {
+        // RFC 6265: cookie-path `/facet/app/` does not match a request for
+        // `/facet/app`, so the slash would silently narrow the cookie.
+        let out = rewrite_cookie("s=1; Path=/", "/facet/app");
+        assert!(out.contains("Path=/facet/app;") || out.ends_with("Path=/facet/app"), "got {out}");
+    }
+
+    #[test]
+    fn a_root_path_is_scoped_to_the_prefix() {
+        let out = rewrite_cookie("session=abc; Path=/", "/facet/app");
+        assert!(out.contains("Path=/facet/app"), "got {out}");
+    }
+
+    #[test]
+    fn a_deeper_path_is_moved_under_the_prefix() {
+        // Path=/rest would never match /facet/app/rest.
+        let out = rewrite_cookie("t=1; Path=/rest", "/facet/app");
+        assert!(out.contains("Path=/facet/app/rest"), "got {out}");
+    }
+
+    #[test]
+    fn an_already_scoped_path_is_left_alone() {
+        let out = rewrite_cookie("t=1; Path=/facet/app/rest", "/facet/app");
+        assert!(out.contains("Path=/facet/app/rest"), "got {out}");
+        assert!(!out.contains("/facet/app/facet"), "double-prefixed: {out}");
+    }
+
+    #[test]
+    fn a_cookie_without_a_path_gets_one() {
+        // Otherwise it defaults to the request's directory, which for a deep
+        // API call is narrower than the app assumes.
+        let out = rewrite_cookie("CSRF-Token-X=abc", "/facet/app");
+        assert!(out.starts_with("CSRF-Token-X=abc"), "got {out}");
+        assert!(out.contains("Path=/facet/app"), "got {out}");
+    }
+
+    #[test]
+    fn the_cookie_value_itself_is_never_touched() {
+        let out = rewrite_cookie("s=aB3/+=xyz; Path=/; Secure", "/facet/app");
+        assert!(out.starts_with("s=aB3/+=xyz"), "got {out}");
+    }
+
+    #[test]
+    fn every_set_cookie_header_is_rewritten_not_just_the_first() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.append(header::SET_COOKIE, HeaderValue::from_static("a=1; Secure"));
+        headers.append(header::SET_COOKIE, HeaderValue::from_static("b=2; Secure"));
+        rewrite_cookies(&mut headers, "/facet/app");
+
+        let all: Vec<String> = headers
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .map(|v| v.to_str().unwrap().to_string())
+            .collect();
+        assert_eq!(all.len(), 2, "both must survive: {all:?}");
+        assert!(all.iter().all(|c| !c.to_lowercase().contains("secure")), "{all:?}");
     }
 
     #[test]
