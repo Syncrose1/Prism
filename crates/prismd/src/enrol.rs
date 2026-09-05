@@ -18,7 +18,7 @@
 //! hand, which is where this started.
 
 use anyhow::Context as _;
-use prism_core::auth::totp;
+use prism_core::auth::{password, totp};
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
@@ -77,6 +77,7 @@ fn banner(secret: &[u8], uri: &str, path: &Path, reset: bool) {
     println!();
     println!("Stored at {}", path.display());
     println!("Re-run `prismd enrol --reset` to revoke and replace it.");
+    println!("Set a quick-unlock password with `prismd passwd`.");
     println!("─────────────────────────────────────────────────────────");
     println!();
 }
@@ -157,6 +158,74 @@ pub fn command(state_dir: &Path, reset: bool) -> anyhow::Result<()> {
         println!();
     }
     Ok(())
+}
+
+/// `prismd passwd` — set or change the quick-unlock password.
+///
+/// Read from the terminal without echo. Gated on the same local filesystem
+/// access as enrolment, and for the same reason: anyone who can run this can
+/// read the hash file anyway.
+pub fn passwd(state_dir: &Path) -> anyhow::Result<()> {
+    let path = state_dir.join("password.hash");
+
+    let first = read_hidden("New password: ")?;
+    if first.chars().count() < password::MIN_LENGTH {
+        anyhow::bail!(
+            "password must be at least {} characters",
+            password::MIN_LENGTH
+        );
+    }
+    let second = read_hidden("Repeat: ")?;
+    if first != second {
+        anyhow::bail!("passwords do not match");
+    }
+
+    let hash = password::hash(&first).map_err(|e| anyhow::anyhow!("{e}"))?;
+    write_secret(&path, hash.as_bytes())?;
+
+    println!();
+    println!("Password set. Enrolled devices can now sign in with it.");
+    println!("A device still needs one authenticator code the first time.");
+    println!();
+    println!("Restart prismd for the change to take effect.");
+    println!();
+    Ok(())
+}
+
+/// Prompt without echoing, restoring the terminal afterwards.
+fn read_hidden(prompt: &str) -> anyhow::Result<String> {
+    use std::io::{BufRead, Write};
+    print!("{prompt}");
+    std::io::stdout().flush()?;
+
+    // SAFETY: tcgetattr/tcsetattr read and write one termios we own. Echo is
+    // restored below on every path, including the error one.
+    let fd = 0;
+    let mut term: libc::termios = unsafe { std::mem::zeroed() };
+    let is_tty = unsafe { libc::tcgetattr(fd, &mut term) } == 0;
+    let original = term;
+    if is_tty {
+        term.c_lflag &= !libc::ECHO;
+        unsafe { libc::tcsetattr(fd, libc::TCSANOW, &term) };
+    }
+
+    let mut line = String::new();
+    let read = std::io::stdin().lock().read_line(&mut line);
+
+    if is_tty {
+        unsafe { libc::tcsetattr(fd, libc::TCSANOW, &original) };
+        println!();
+    }
+    read?;
+    Ok(line.trim_end_matches(['\n', '\r']).to_string())
+}
+
+/// Load the stored password hash, if one has been set.
+pub fn load_password_hash(state_dir: &Path) -> Option<String> {
+    std::fs::read_to_string(state_dir.join("password.hash"))
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 fn account() -> String {

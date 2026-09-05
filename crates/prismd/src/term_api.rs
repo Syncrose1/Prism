@@ -1,8 +1,8 @@
 //! Terminal HTTP and WebSocket surface.
 //!
-//! Everything here is [`Sensitivity::Fresh`]. A shell is unrestricted access to
-//! the machine, and it would be incoherent for downloading a file to require a
-//! recent authenticator code while opening a terminal did not. See ADR 0003 §4.
+//! Everything here needs an unlocked session. A shell is unrestricted access
+//! to the machine, so it sits at the same tier as files rather than a lower one.
+//! See ADR 0003 §4 and `auth` for why the timed tier was removed.
 //!
 //! The WebSocket carries raw bytes in both directions — terminal traffic is
 //! escape sequences, not text, and any framing or transcoding on the way through
@@ -72,7 +72,7 @@ fn guard(state: &AppState, headers: &HeaderMap) -> Option<Response> {
             "terminal sessions are disabled on this host",
         ));
     }
-    require(state, headers, Sensitivity::Fresh)
+    require(state, headers, Sensitivity::Session)
 }
 
 // ---------------------------------------------------------------------------

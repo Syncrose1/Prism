@@ -99,15 +99,15 @@ fn login_page(message: Option<&str>) -> Response {
     let mut html = String::from(HEAD);
     html.push_str(
         r#"<h1>Prism — Critical Functions</h1>
-<p class="sub">Enter the current code from your authenticator.</p>"#,
+<p class="sub">Authenticator code, or your password if this device is enrolled.</p>"#,
     );
     if let Some(msg) = message {
         let _ = write!(html, r#"<p class="tier red">{}</p>"#, esc(msg));
     }
     html.push_str(
         r#"<form method="post" action="/rescue/login">
-<input type="text" name="code" inputmode="numeric" pattern="[0-9]*" maxlength="6"
- autocomplete="one-time-code" autofocus placeholder="000000">
+<input type="password" name="code" autocomplete="current-password" autofocus
+ placeholder="code or password">
 <button type="submit">Sign in</button></form>
 <p class="note">This page needs no JavaScript and works in a text browser.</p>
 </body></html>"#,
@@ -120,24 +120,60 @@ struct LoginForm {
     code: String,
 }
 
-async fn login(State(state): State<AppState>, Form(form): Form<LoginForm>) -> Response {
+async fn login(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<LoginForm>,
+) -> Response {
+    use prism_core::auth::CodeOutcome;
     let now = prism_core::auth::totp::now_unix();
-    match state.auth.submit_code(&form.code, now) {
-        (prism_core::auth::CodeOutcome::Accepted, Some(token)) => {
+    let policy = *state.auth.policy();
+
+    // Rescue accepts either factor, since the operator reaching for it may be
+    // on a browser that was never enrolled.
+    let entered = form.code.trim();
+    let (outcome, session, device) = if entered.chars().all(|c| c.is_ascii_digit())
+        && entered.len() == 6
+    {
+        state.auth.submit_code(entered, now)
+    } else {
+        let (o, s) = state
+            .auth
+            .submit_password(entered, crate::api::device_token(&headers).as_deref(), now);
+        (o, s, None)
+    };
+
+    match (outcome, session) {
+        (CodeOutcome::Accepted, Some(token)) => {
             info!("rescue: signed in");
-            let cookie = format!(
+            let mut response = Redirect::to("/rescue").into_response();
+            let out = response.headers_mut();
+            if let Ok(v) = format!(
                 "prism_session={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={}",
-                state.auth.policy().session_ttl_secs
-            );
-            ([(header::SET_COOKIE, cookie)], Redirect::to("/rescue")).into_response()
+                policy.session_ttl_secs
+            )
+            .parse()
+            {
+                out.append(header::SET_COOKIE, v);
+            }
+            if let Some(d) = &device
+                && let Ok(v) = format!(
+                    "prism_device={d}; Path=/; HttpOnly; SameSite=Strict; Max-Age={}",
+                    policy.device_ttl_secs
+                )
+                .parse()
+            {
+                out.append(header::SET_COOKIE, v);
+            }
+            response
         }
-        (prism_core::auth::CodeOutcome::Replayed, _) => {
+        (CodeOutcome::Replayed, _) => {
             login_page(Some("that code has already been used — wait for the next one"))
         }
-        (prism_core::auth::CodeOutcome::LockedOut { retry_after_secs }, _) => login_page(Some(
-            &format!("too many attempts; retry in {retry_after_secs}s"),
-        )),
-        _ => login_page(Some("incorrect code")),
+        (CodeOutcome::LockedOut { retry_after_secs }, _) => login_page(Some(&format!(
+            "too many attempts; retry in {retry_after_secs}s"
+        ))),
+        _ => login_page(Some("incorrect")),
     }
 }
 

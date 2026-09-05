@@ -255,6 +255,14 @@ mod tests {
             .expect("spawn");
         let pid = child.id();
         guard.protect("sleep");
+
+        // Between fork and exec the child still carries the parent's comm, so
+        // asserting immediately is a race that only shows up under load.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while comm_of(pid).as_deref() != Some("sleep") && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+
         assert_eq!(
             guard.check(pid),
             Err(Refusal::Protected("sleep".into())),

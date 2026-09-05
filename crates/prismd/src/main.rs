@@ -36,11 +36,15 @@ fn main() -> anyhow::Result<()> {
             let reset = args.iter().any(|a| a == "--reset");
             return enrol::command(&config::state_dir(), reset);
         }
+        Some("passwd") | Some("password") => {
+            return enrol::passwd(&config::state_dir());
+        }
         Some("--help") | Some("-h") => {
             println!("prismd — the Prism daemon\n");
             println!("  prismd                 run the daemon");
             println!("  prismd enrol           show enrolment status");
             println!("  prismd enrol --reset   revoke and replace the authenticator secret");
+            println!("  prismd passwd          set the quick-unlock password");
             return Ok(());
         }
         Some(other) => anyhow::bail!("unknown command `{other}`; try --help"),
@@ -74,11 +78,14 @@ fn main() -> anyhow::Result<()> {
     let secret = enrol::load_or_enrol(&state_dir)?;
     let session_key = SessionKey::load_or_create(&state_dir.join("session.key"))
         .context("loading session key")?;
-    let auth = Arc::new(Authenticator::new(
-        session_key,
-        secret,
-        AuthPolicy::default(),
-    ));
+    let password_hash = enrol::load_password_hash(&state_dir);
+    if password_hash.is_none() {
+        info!("no unlock password set; every sign-in will need an authenticator code (`prismd passwd`)");
+    }
+    let auth = Arc::new(
+        Authenticator::new(session_key, secret, AuthPolicy::default())
+            .with_password_hash(password_hash),
+    );
 
     let vitals: api::SharedVitals = Arc::new(RwLock::new(api::Vitals::default()));
     let facets = Arc::new(RwLock::new(profile.facet.clone()));

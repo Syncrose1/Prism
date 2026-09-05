@@ -281,9 +281,7 @@ fn err(status: StatusCode, error: &'static str, detail: impl Into<String>) -> Re
         .into_response()
 }
 
-/// Files are [`Sensitivity::Fresh`]: reading the filesystem is the most
-/// sensitive read Prism offers, and a long-lived session on a phone is not the
-/// same assurance as proving possession of it now.
+/// Files need an unlocked session, like everything else that is not public.
 fn guard(state: &AppState, headers: &HeaderMap) -> Option<Response> {
     if state.roots.is_empty() {
         return Some(err(
@@ -292,7 +290,7 @@ fn guard(state: &AppState, headers: &HeaderMap) -> Option<Response> {
             "no file roots are configured",
         ));
     }
-    require(state, headers, Sensitivity::Fresh)
+    require(state, headers, Sensitivity::Session)
 }
 
 /// Resolve `(root, path)` from a query into a real, contained filesystem path.

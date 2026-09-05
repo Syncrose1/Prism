@@ -13,7 +13,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use prism_core::auth::{AuthOutcome, Authenticator, CodeOutcome, Sensitivity, totp};
+use prism_core::auth::{AuthOutcome, Authenticator, CodeOutcome, LoginPrompt, Sensitivity, totp};
 use prism_core::config::Facet;
 use prism_core::governor::Tier;
 use prism_core::sensors::disk::MountUsage;
@@ -99,6 +99,7 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/api/health", get(health))
         .route("/api/auth/login", post(login))
+        .route("/api/auth/prompt", get(login_prompt))
         .route("/api/vitals", get(vitals))
         .route("/api/events", get(events))
         // Critical Functions Mode. Merged rather than nested so it shares no
@@ -118,38 +119,47 @@ pub fn router(state: AppState) -> Router {
 // ---------------------------------------------------------------------------
 
 const SESSION_COOKIE: &str = "prism_session";
+/// Long-lived, and separate on purpose: clearing a session must not un-enrol the
+/// browser, or every sign-in would need the phone again.
+const DEVICE_COOKIE: &str = "prism_device";
 
-/// Extract a session token from either the cookie or a bearer header.
+fn cookie(headers: &HeaderMap, name: &str) -> Option<String> {
+    let cookies = headers.get("cookie")?.to_str().ok()?;
+    cookies.split(';').find_map(|part| {
+        let (k, v) = part.split_once('=')?;
+        (k.trim() == name).then(|| v.trim().to_string())
+    })
+}
+
+/// The session token, from either the cookie or a bearer header.
 ///
 /// The header form exists so the CLI and scripts do not need a cookie jar.
-fn token_from(headers: &HeaderMap) -> Option<String> {
+pub(crate) fn session_token(headers: &HeaderMap) -> Option<String> {
     if let Some(auth) = headers.get("authorization").and_then(|v| v.to_str().ok())
         && let Some(bearer) = auth.strip_prefix("Bearer ")
     {
         return Some(bearer.trim().to_string());
     }
-    let cookies = headers.get("cookie")?.to_str().ok()?;
-    cookies.split(';').find_map(|part| {
-        let (name, value) = part.split_once('=')?;
-        (name.trim() == SESSION_COOKIE).then(|| value.trim().to_string())
-    })
+    cookie(headers, SESSION_COOKIE)
+}
+
+pub(crate) fn device_token(headers: &HeaderMap) -> Option<String> {
+    cookie(headers, DEVICE_COOKIE)
+}
+
+fn session_cookie(token: &str, ttl: u64) -> String {
+    format!("{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={ttl}")
+}
+
+fn device_cookie(token: &str, ttl: u64) -> String {
+    format!("{DEVICE_COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={ttl}")
 }
 
 /// Enforce a tier, returning the error response to send if it is not met.
 pub(crate) fn require(state: &AppState, headers: &HeaderMap, need: Sensitivity) -> Option<Response> {
     let now = totp::now_unix();
-    match state.auth.authorize(token_from(headers).as_deref(), need, now) {
+    match state.auth.authorize(session_token(headers).as_deref(), need, now) {
         AuthOutcome::Granted => None,
-        AuthOutcome::NeedsFreshCode => Some(
-            (
-                StatusCode::FORBIDDEN,
-                Json(ErrorBody {
-                    error: "fresh_code_required",
-                    detail: "this action needs a current authenticator code".into(),
-                }),
-            )
-                .into_response(),
-        ),
         AuthOutcome::Unauthenticated => Some(
             (
                 StatusCode::UNAUTHORIZED,
@@ -202,7 +212,12 @@ async fn health() -> Json<Health> {
 
 #[derive(Deserialize)]
 struct LoginRequest {
-    code: String,
+    /// An authenticator code, when enrolling this browser.
+    #[serde(default)]
+    code: Option<String>,
+    /// The unlock password, when the browser is already enrolled.
+    #[serde(default)]
+    password: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -210,58 +225,114 @@ struct LoginResponse {
     ok: bool,
     /// Also returned in the body so non-browser clients need no cookie jar.
     token: String,
-    fresh_window_secs: u64,
+    /// True when this sign-in also enrolled the browser.
+    enrolled: bool,
 }
 
-async fn login(State(state): State<AppState>, Json(body): Json<LoginRequest>) -> Response {
-    let now = totp::now_unix();
-    let (outcome, token) = state.auth.submit_code(&body.code, now);
+#[derive(Serialize)]
+struct PromptResponse {
+    /// "password" when this browser is enrolled and a password is set,
+    /// otherwise "code".
+    prompt: &'static str,
+    has_password: bool,
+}
 
-    match (outcome, token) {
-        (CodeOutcome::Accepted, Some(token)) => {
-            info!("authenticator code accepted; session issued");
-            let cookie = format!(
-                "{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={}",
-                state.auth.policy().session_ttl_secs
+/// What the login screen should ask for. Public: it reveals only whether *this*
+/// browser is already enrolled, which that browser necessarily knows.
+async fn login_prompt(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let now = totp::now_unix();
+    let prompt = state
+        .auth
+        .prompt_for(device_token(&headers).as_deref(), now);
+    Json(PromptResponse {
+        prompt: match prompt {
+            LoginPrompt::Password => "password",
+            LoginPrompt::Code => "code",
+        },
+        has_password: state.auth.has_password(),
+    })
+    .into_response()
+}
+
+async fn login(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<LoginRequest>,
+) -> Response {
+    let now = totp::now_unix();
+    let policy = *state.auth.policy();
+
+    // A code enrols the browser and unlocks in one step; a password only
+    // unlocks, and only on a browser already enrolled.
+    let (outcome, session, device) = match (&body.code, &body.password) {
+        (Some(code), _) if !code.trim().is_empty() => state.auth.submit_code(code, now),
+        (_, Some(pw)) if !pw.is_empty() => {
+            let (o, s) = state
+                .auth
+                .submit_password(pw, device_token(&headers).as_deref(), now);
+            (o, s, None)
+        }
+        _ => {
+            return err_json(
+                StatusCode::BAD_REQUEST,
+                "no_credential",
+                "provide a code or a password",
             );
+        }
+    };
+
+    match (outcome, session) {
+        (CodeOutcome::Accepted, Some(token)) => {
+            info!(enrolled = device.is_some(), "signed in");
+            // Two Set-Cookie headers when enrolling, which needs a hand-built
+            // response — a header map cannot hold the same name twice via the
+            // tuple form.
             let body = Json(LoginResponse {
                 ok: true,
-                token,
-                fresh_window_secs: state.auth.policy().fresh_window_secs,
+                token: token.clone(),
+                enrolled: device.is_some(),
             });
-            ([("set-cookie", cookie)], body).into_response()
+            let mut response = body.into_response();
+            let out = response.headers_mut();
+            if let Ok(v) = session_cookie(&token, policy.session_ttl_secs).parse() {
+                out.append(axum::http::header::SET_COOKIE, v);
+            }
+            if let Some(d) = &device
+                && let Ok(v) = device_cookie(d, policy.device_ttl_secs).parse()
+            {
+                out.append(axum::http::header::SET_COOKIE, v);
+            }
+            response
         }
         (CodeOutcome::Replayed, _) => {
             warn!("authenticator code replayed");
-            (
+            err_json(
                 StatusCode::UNAUTHORIZED,
-                Json(ErrorBody {
-                    error: "code_already_used",
-                    detail: "that code has already been used; wait for the next one".into(),
-                }),
+                "code_already_used",
+                "that code has already been used; wait for the next one",
             )
-                .into_response()
         }
-        (CodeOutcome::LockedOut { retry_after_secs }, _) => (
+        (CodeOutcome::LockedOut { retry_after_secs }, _) => err_json(
             StatusCode::TOO_MANY_REQUESTS,
-            Json(ErrorBody {
-                error: "locked_out",
-                detail: format!("too many attempts; retry in {retry_after_secs}s"),
-            }),
-        )
-            .into_response(),
+            "locked_out",
+            format!("too many attempts; retry in {retry_after_secs}s"),
+        ),
         _ => {
-            warn!("authenticator code rejected");
-            (
-                StatusCode::UNAUTHORIZED,
-                Json(ErrorBody {
-                    error: "invalid_code",
-                    detail: "incorrect code".into(),
-                }),
-            )
-                .into_response()
+            warn!("sign-in rejected");
+            err_json(StatusCode::UNAUTHORIZED, "invalid", "incorrect")
         }
     }
+}
+
+fn err_json(status: StatusCode, error: &'static str, detail: impl Into<String>) -> Response {
+    (
+        status,
+        Json(ErrorBody {
+            error,
+            detail: detail.into(),
+        }),
+    )
+        .into_response()
 }
 
 /// The Timeline's source. Prism's own actions appear here alongside what it
@@ -295,31 +366,47 @@ mod tests {
     #[test]
     fn extracts_bearer_token() {
         let headers = headers_with("authorization", "Bearer abc.def");
-        assert_eq!(token_from(&headers).as_deref(), Some("abc.def"));
+        assert_eq!(session_token(&headers).as_deref(), Some("abc.def"));
     }
 
     #[test]
     fn extracts_session_cookie() {
         let headers = headers_with("cookie", "other=1; prism_session=tok.en; another=2");
-        assert_eq!(token_from(&headers).as_deref(), Some("tok.en"));
+        assert_eq!(session_token(&headers).as_deref(), Some("tok.en"));
     }
 
     #[test]
     fn ignores_similarly_named_cookies() {
         // Must not match `prism_session_backup` or `not_prism_session`.
         let headers = headers_with("cookie", "prism_session_backup=nope; not_prism_session=no");
-        assert_eq!(token_from(&headers), None);
+        assert_eq!(session_token(&headers), None);
     }
 
     #[test]
     fn no_credentials_yields_none() {
-        assert_eq!(token_from(&HeaderMap::new()), None);
+        assert_eq!(session_token(&HeaderMap::new()), None);
     }
 
     #[test]
     fn non_bearer_authorization_is_ignored() {
         let headers = headers_with("authorization", "Basic dXNlcjpwYXNz");
-        assert_eq!(token_from(&headers), None);
+        assert_eq!(session_token(&headers), None);
+    }
+
+    #[test]
+    fn session_and_device_cookies_are_read_independently() {
+        // Clearing a session must not un-enrol the browser, so the two must
+        // never be confused for one another.
+        let headers = headers_with("cookie", "prism_device=dev.tok; prism_session=sess.tok");
+        assert_eq!(session_token(&headers).as_deref(), Some("sess.tok"));
+        assert_eq!(device_token(&headers).as_deref(), Some("dev.tok"));
+    }
+
+    #[test]
+    fn a_device_cookie_alone_yields_no_session() {
+        let headers = headers_with("cookie", "prism_device=dev.tok");
+        assert_eq!(session_token(&headers), None);
+        assert_eq!(device_token(&headers).as_deref(), Some("dev.tok"));
     }
 
     #[test]

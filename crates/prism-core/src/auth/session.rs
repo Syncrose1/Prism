@@ -21,12 +21,41 @@ const TOKEN_VERSION: &str = "v1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Claims {
-    /// When the session itself expires.
+    /// When this token expires.
     pub expires_at: u64,
-    /// When a TOTP code was last successfully presented. Drives the `Fresh`
-    /// tier: holding a valid session is not the same as having proved
-    /// possession of the phone recently.
-    pub totp_verified_at: u64,
+    /// What the token grants.
+    pub kind: TokenKind,
+}
+
+/// Two tokens, two jobs.
+///
+/// The original design had one token carrying "when did you last show a TOTP
+/// code", and gated sensitive actions on that being recent. It meant reaching
+/// for a phone every fifteen minutes of ordinary use. See `password.rs`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TokenKind {
+    /// This browser has proved possession of the authenticator. Long-lived, and
+    /// on its own grants nothing — it only makes the quick unlock available.
+    Device,
+    /// An unlocked session. This is what actually authorises requests.
+    Session,
+}
+
+impl TokenKind {
+    fn tag(&self) -> &'static str {
+        match self {
+            TokenKind::Device => "d",
+            TokenKind::Session => "s",
+        }
+    }
+
+    fn parse(tag: &str) -> Option<Self> {
+        match tag {
+            "d" => Some(TokenKind::Device),
+            "s" => Some(TokenKind::Session),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,7 +111,8 @@ impl SessionKey {
     pub fn issue(&self, claims: Claims) -> String {
         let payload = format!(
             "{TOKEN_VERSION}.{}.{}",
-            claims.expires_at, claims.totp_verified_at
+            claims.expires_at,
+            claims.kind.tag()
         );
         let signature = self.sign(&payload);
         format!("{payload}.{signature}")
@@ -109,8 +139,7 @@ impl SessionKey {
             return Err(TokenError::BadSignature);
         }
 
-        let (Ok(expires_at), Ok(totp_verified_at)) =
-            (expires.parse::<u64>(), verified.parse::<u64>())
+        let (Ok(expires_at), Some(kind)) = (expires.parse::<u64>(), TokenKind::parse(verified))
         else {
             return Err(TokenError::Malformed);
         };
@@ -118,10 +147,7 @@ impl SessionKey {
         if now >= expires_at {
             return Err(TokenError::Expired);
         }
-        Ok(Claims {
-            expires_at,
-            totp_verified_at,
-        })
+        Ok(Claims { expires_at, kind })
     }
 }
 
@@ -158,7 +184,7 @@ mod tests {
     fn claims(now: u64) -> Claims {
         Claims {
             expires_at: now + 3600,
-            totp_verified_at: now,
+            kind: TokenKind::Session,
         }
     }
 
@@ -195,7 +221,7 @@ mod tests {
         let k = key();
         let token = k.issue(Claims {
             expires_at: now + 10,
-            totp_verified_at: now,
+            kind: TokenKind::Session,
         });
         assert_eq!(k.validate(&token, now + 11), Err(TokenError::Expired));
     }
@@ -206,7 +232,7 @@ mod tests {
         let k = key();
         let token = k.issue(Claims {
             expires_at: now + 10,
-            totp_verified_at: now,
+            kind: TokenKind::Session,
         });
         assert!(k.validate(&token, now + 9).is_ok());
         assert_eq!(k.validate(&token, now + 10), Err(TokenError::Expired));
@@ -220,7 +246,7 @@ mod tests {
             "garbage",
             "v1.1.2",
             "v1.1.2.3.4",
-            "v1.notanumber.2.deadbeef",
+            "v1.notanumber.s.deadbeef",
             "....",
         ] {
             assert!(
@@ -228,6 +254,29 @@ mod tests {
                 "token {bad:?} must be rejected"
             );
         }
+    }
+
+    #[test]
+    fn a_device_token_and_a_session_token_are_not_interchangeable() {
+        // A device token proves the browser was enrolled; it must not by itself
+        // authorise anything, or the password would be decorative.
+        let now = 1_700_000_000;
+        let k = key();
+        let device = k.issue(Claims { expires_at: now + 3600, kind: TokenKind::Device });
+        assert_eq!(k.validate(&device, now).unwrap().kind, TokenKind::Device);
+
+        let session = k.issue(Claims { expires_at: now + 3600, kind: TokenKind::Session });
+        assert_eq!(k.validate(&session, now).unwrap().kind, TokenKind::Session);
+        assert_ne!(device, session);
+    }
+
+    #[test]
+    fn a_token_kind_cannot_be_edited_without_breaking_the_signature() {
+        let now = 1_700_000_000;
+        let k = key();
+        let device = k.issue(Claims { expires_at: now + 3600, kind: TokenKind::Device });
+        let forged = device.replacen(".d.", ".s.", 1);
+        assert_eq!(k.validate(&forged, now), Err(TokenError::BadSignature));
     }
 
     #[test]
@@ -245,7 +294,7 @@ mod tests {
         // attacker their forgery worked.
         let now = 1_700_000_000;
         let k = key();
-        let forged = format!("v1.{}.{}.{}", now - 100, now - 100, "00".repeat(32));
+        let forged = format!("v1.{}.s.{}", now - 100, "00".repeat(32));
         assert_eq!(k.validate(&forged, now), Err(TokenError::BadSignature));
     }
 

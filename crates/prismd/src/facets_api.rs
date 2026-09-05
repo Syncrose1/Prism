@@ -1,9 +1,8 @@
 //! Facet control.
 //!
 //! Starting a facet runs an operator-configured command, which is close enough
-//! to arbitrary execution that it sits at [`Sensitivity::Fresh`] alongside files
-//! and terminals. Reading their state is only `Session` — glancing at whether
-//! ComfyUI is up should not demand a code.
+//! to arbitrary execution to need an unlocked session — the same tier as files
+//! and terminals.
 //!
 //! Stopping prefers `cgroup.kill`: atomic across the whole tree, so a workload
 //! that forked CUDA workers dies in one operation with nothing orphaned. That is
@@ -221,7 +220,7 @@ async fn create(
 ) -> Response {
     // Adding a facet defines a command Prism will later run, so it is as
     // sensitive as running one.
-    if let Some(d) = require(&state, &headers, Sensitivity::Fresh) {
+    if let Some(d) = require(&state, &headers, Sensitivity::Session) {
         return d;
     }
 
@@ -278,7 +277,7 @@ async fn remove(
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> Response {
-    if let Some(d) = require(&state, &headers, Sensitivity::Fresh) {
+    if let Some(d) = require(&state, &headers, Sensitivity::Session) {
         return d;
     }
     let Some(removed) = find(&state, &id) else {
@@ -304,7 +303,7 @@ async fn start(
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> Response {
-    if let Some(d) = require(&state, &headers, Sensitivity::Fresh) {
+    if let Some(d) = require(&state, &headers, Sensitivity::Session) {
         return d;
     }
     let Some(facet) = find(&state, &id) else {
@@ -369,7 +368,7 @@ async fn start(
 
 /// Ask a facet to stop, letting it run its own shutdown.
 async fn stop(State(state): State<AppState>, Path(id): Path<String>, headers: HeaderMap) -> Response {
-    if let Some(d) = require(&state, &headers, Sensitivity::Fresh) {
+    if let Some(d) = require(&state, &headers, Sensitivity::Session) {
         return d;
     }
     if find(&state, &id).is_none() {
@@ -386,7 +385,7 @@ async fn stop(State(state): State<AppState>, Path(id): Path<String>, headers: He
 
 /// Terminate the whole tree immediately, for a workload that will not stop.
 async fn kill(State(state): State<AppState>, Path(id): Path<String>, headers: HeaderMap) -> Response {
-    if let Some(d) = require(&state, &headers, Sensitivity::Fresh) {
+    if let Some(d) = require(&state, &headers, Sensitivity::Session) {
         return d;
     }
     if find(&state, &id).is_none() {
@@ -411,7 +410,7 @@ async fn set_limits(
     headers: HeaderMap,
     Json(body): Json<LimitsView>,
 ) -> Response {
-    if let Some(d) = require(&state, &headers, Sensitivity::Fresh) {
+    if let Some(d) = require(&state, &headers, Sensitivity::Session) {
         return d;
     }
     if find(&state, &id).is_none() {

@@ -19,6 +19,9 @@ hmac = "0.12"
 sha1 = "0.10"
 sha2 = "0.10"
 subtle = "2"
+# Password hashing. Argon2id is the current recommendation: memory-hard, so a
+# stolen hash is expensive to attack even with a GPU.
+argon2 = "0.6"
 
 # statvfs for the disk sensor. Also the only sane route to mlockall later.
 libc = "0.2"
