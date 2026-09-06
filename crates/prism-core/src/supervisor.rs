@@ -26,6 +26,39 @@ pub fn unit_name(facet_id: &str) -> String {
     format!("prism-{facet_id}.service")
 }
 
+/// Unit name for a facet launched through a terminal, for the same reason:
+/// so the association outlives the process that made it.
+pub fn facet_scope_name(facet_id: &str) -> String {
+    format!("prism-facet-{facet_id}.scope")
+}
+
+/// Whichever unit is actually carrying this facet right now.
+///
+/// A facet runs headless as a service or interactively as a scope, and which
+/// one it is depends on how it was configured when it was started — not on how
+/// it is configured now. Asking systemd both questions is the only answer that
+/// stays true across an edit, or a restart of the daemon.
+fn live_unit(facet_id: &str) -> Option<(String, &'static str)> {
+    for (unit, state) in [
+        (unit_name(facet_id), "service"),
+        (facet_scope_name(facet_id), "scope"),
+    ] {
+        if matches!(active_state(&unit).as_deref(), Some("active" | "activating")) {
+            return Some((unit, state));
+        }
+    }
+    None
+}
+
+fn active_state(unit: &str) -> Option<String> {
+    let out = Command::new("systemctl")
+        .args(["--user", "show", unit, "-p", "ActiveState", "--value"])
+        .output()
+        .ok()?;
+    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (!s.is_empty()).then_some(s)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FacetStatus {
     /// No transient unit exists.
@@ -144,7 +177,13 @@ impl Supervisor {
 
     /// Ask a facet to stop politely, letting it run its own shutdown.
     pub fn stop(&self, facet_id: &str) -> anyhow::Result<()> {
-        run_systemctl(&["stop", &unit_name(facet_id)])
+        // Whichever unit is carrying it: stopping the service name while the
+        // workload runs in a scope reports success and changes nothing, which
+        // is the worst possible outcome for a Stop button.
+        let unit = self
+            .active_unit(facet_id)
+            .unwrap_or_else(|| unit_name(facet_id));
+        run_systemctl(&["stop", &unit])
     }
 
     /// Change limits on a *running* facet, without restarting it.
@@ -157,7 +196,9 @@ impl Supervisor {
         if properties.is_empty() {
             return Ok(());
         }
-        let unit = unit_name(facet_id);
+        let unit = self
+            .active_unit(facet_id)
+            .unwrap_or_else(|| unit_name(facet_id));
         let mut args = vec!["set-property", "--runtime", unit.as_str()];
         args.extend(properties.iter().map(|s| s.as_str()));
         run_systemctl(&args)
@@ -170,18 +211,18 @@ impl Supervisor {
     /// would put a socket connect inside every status poll. Callers that care
     /// upgrade `Stopped` to `Foreign` themselves.
     pub fn status(&self, facet_id: &str) -> FacetStatus {
-        let unit = unit_name(facet_id);
-        let Ok(output) = Command::new("systemctl")
-            .args(["--user", "show", &unit, "-p", "ActiveState", "--value"])
-            .output()
-        else {
-            return FacetStatus::Stopped;
-        };
-        match String::from_utf8_lossy(&output.stdout).trim() {
-            "active" | "activating" => FacetStatus::Running,
-            "failed" => FacetStatus::Failed("unit failed".into()),
+        if live_unit(facet_id).is_some() {
+            return FacetStatus::Running;
+        }
+        match active_state(&unit_name(facet_id)).as_deref() {
+            Some("failed") => FacetStatus::Failed("unit failed".into()),
             _ => FacetStatus::Stopped,
         }
+    }
+
+    /// The unit to act on, for callers that need to signal or measure.
+    pub fn active_unit(&self, facet_id: &str) -> Option<String> {
+        live_unit(facet_id).map(|(u, _)| u)
     }
 
     /// Current memory charge for a facet, in kB.
@@ -205,15 +246,11 @@ impl Supervisor {
     /// Resolve a facet's cgroup directory by asking systemd, rather than
     /// assuming a hierarchy layout that differs between distributions.
     fn cgroup_path(&self, facet_id: &str) -> anyhow::Result<Option<std::path::PathBuf>> {
+        let unit = self
+            .active_unit(facet_id)
+            .unwrap_or_else(|| unit_name(facet_id));
         let output = Command::new("systemctl")
-            .args([
-                "--user",
-                "show",
-                &unit_name(facet_id),
-                "-p",
-                "ControlGroup",
-                "--value",
-            ])
+            .args(["--user", "show", &unit, "-p", "ControlGroup", "--value"])
             .output()?;
         let relative = String::from_utf8_lossy(&output.stdout).trim().to_string();
         if relative.is_empty() || relative == "/" {
@@ -357,6 +394,28 @@ mod tests {
     fn cgroup_lookup_of_nonexistent_facet_is_none() {
         let s = Supervisor::new();
         assert!(s.memory_current_kb("definitely-not-a-real-facet-xyzzy").is_none());
+    }
+
+    #[test]
+    fn a_facet_can_be_carried_by_either_a_service_or_a_scope() {
+        // A pty facet runs as a terminal scope, not a service. Looking only
+        // for the service name reported it as stopped while it was serving,
+        // and the interface then said Prism could not control something Prism
+        // had itself started.
+        assert_eq!(unit_name("comfyui"), "prism-comfyui.service");
+        assert_eq!(facet_scope_name("comfyui"), "prism-facet-comfyui.scope");
+        assert_ne!(unit_name("comfyui"), facet_scope_name("comfyui"));
+    }
+
+    #[test]
+    fn scope_names_are_derived_from_the_facet_not_the_session() {
+        // The association has to outlive the daemon: a session id is random
+        // and lives only in one process, so after a restart nothing could tell
+        // that a running scope belonged to a facet.
+        for id in ["comfyui", "llama", "a-b-c"] {
+            assert!(facet_scope_name(id).contains(id));
+            assert!(facet_scope_name(id).ends_with(".scope"));
+        }
     }
 
     #[test]

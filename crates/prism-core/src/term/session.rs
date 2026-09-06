@@ -252,7 +252,7 @@ impl SessionManager {
         size: WinSize,
         title: &str,
     ) -> Result<Arc<Session>, SpawnError> {
-        self.create_with(argv, cwd, size, title, false)
+        self.create_with(argv, cwd, size, title, false, None)
     }
 
     /// As [`Self::create`], but the command is made proof against hangup.
@@ -267,7 +267,27 @@ impl SessionManager {
         size: WinSize,
         title: &str,
     ) -> Result<Arc<Session>, SpawnError> {
-        self.create_with(argv, cwd, size, title, true)
+        self.create_with(argv, cwd, size, title, true, None)
+    }
+
+    /// Start a facet's interactive launcher, under a unit named after the
+    /// facet rather than after the session.
+    ///
+    /// The name is the whole point. A session id is random and lives only in
+    /// this process, so once the daemon restarts nothing can tell that the
+    /// scope still running belongs to a facet — and the workload gets reported
+    /// as something Prism did not start and cannot control, which is both
+    /// wrong and unhelpful. Naming the unit after the facet puts that
+    /// association in systemd, where it survives the daemon.
+    pub fn create_for_facet(
+        &self,
+        facet_id: &str,
+        argv: &[String],
+        cwd: Option<&str>,
+        size: WinSize,
+        title: &str,
+    ) -> Result<Arc<Session>, SpawnError> {
+        self.create_with(argv, cwd, size, title, true, Some(facet_id))
     }
 
     fn create_with(
@@ -277,6 +297,7 @@ impl SessionManager {
         size: WinSize,
         title: &str,
         hangup_proof: bool,
+        facet_id: Option<&str>,
     ) -> Result<Arc<Session>, SpawnError> {
         if !self.cfg.enabled {
             return Err(SpawnError::Disabled);
@@ -329,7 +350,10 @@ impl SessionManager {
         // Wrap in a transient scope so the session is contained by a cgroup.
         // `--quiet` keeps systemd's "Running scope as unit…" line out of the
         // terminal the operator is looking at.
-        let unit = self.cfg.use_scope.then(|| format!("prism-term-{id}.scope"));
+        let unit = self.cfg.use_scope.then(|| match facet_id {
+            Some(f) => crate::supervisor::facet_scope_name(f),
+            None => format!("prism-term-{id}.scope"),
+        });
         let full: Vec<String> = match &unit {
             Some(u) => {
                 let mut v = vec![

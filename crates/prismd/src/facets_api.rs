@@ -478,7 +478,8 @@ async fn start(
         let cwd = facet.cwd.as_ref().map(|p| p.display().to_string());
         // Hangup-proof: a facet is a workload, not a shell. It must outlive the
         // window it was launched from and the daemon that launched it.
-        return match state.terminals.create_hangup_proof(
+        return match state.terminals.create_for_facet(
+            &id,
             &facet.command,
             cwd.as_deref(),
             prism_core::term::pty::WinSize { rows: 30, cols: 100 },

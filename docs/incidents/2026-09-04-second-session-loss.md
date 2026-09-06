@@ -9,6 +9,21 @@
 **Diagnosed from:** `c1` (<laptop>), over Tailscale SSH
 **Author:** Claude (Opus 5), c1 session
 
+> [!NOTE]
+> **Partially corrected by
+> [`2026-09-06-tray-lock-contention.md`](./2026-09-06-tray-lock-contention.md)
+> (2026-09-06).**
+>
+> §2 of this report recommended converting `sunshine.service` to a session-scoped
+> **user unit**. That was implemented on 2026-09-04 23:43 and is *not* required:
+> the 2026-09-06 streaming outage reproduced identically under both unit types,
+> and reverting the migration did not fix it. The real cause there was Sunshine's
+> broken GTK tray icon periodically holding a lock its HTTP threads needed.
+>
+> The `WAYLAND_DISPLAY` defect identified in §3.3 is real and still worth fixing —
+> but setting `Environment=WAYLAND_DISPLAY=wayland-1` in the system unit solves it
+> just as well, and is what runs on `c2` today.
+
 **Companion document:** [`2026-09-04-session-loss.md`](./2026-09-04-session-loss.md) —
 the 19:30 incident. **These are separate incidents with different root causes.**
 Incident 1 was an upstream Hyprland segfault. This one was not a crash at all.
