@@ -26,25 +26,57 @@
 
 :root {
   --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+  /* The System's face, for the few places Prism declaims. Everywhere else stays
+     monospace: Prism is a console, and that is not a costume it is wearing. */
+  --display: "Chakra Petch", ui-sans-serif, system-ui, sans-serif;
 
-  --void:      #050608;
-  --base:      #0a0c10;
-  --surface:   #0f1116;
-  --raised:    #14171e;
-  --line:      #1c2029;
-  --line-hi:   #2c313d;
+  /* ── The Stargazer palette ──────────────────────────────────────────────
+     Generated values, from contract/identity/stargazer.tokens.json. Prism is
+     one surface of one system now, and it should not have its own idea of what
+     grey is.
 
-  --ink:       #e8ebf0;
-  --ink-dim:   #99a1ae;
-  --ink-faint: #5c6472;
-  --ink-ghost: #363c47;
+     The tier colours are the interesting part, because Prism already had a
+     better rule here than anything imposed from outside: as the machine
+     degrades, decorative colour drains out of the desktop and the tier colour
+     washes in, until at Black the only chroma left on screen IS the warning.
+     That rule stays exactly as it is.
 
-  --green: #4ade80;
-  --amber: #fbbf24;
-  --red:   #fb7185;
+     What changes is which three colours it uses — and they turn out to be the
+     same three the identity already names, meaning the same three things:
+
+       green -> CYAN    the System operating. Prism's green tier means the
+                        machine is fine and running normally, which is what
+                        cyan means everywhere else in this system. Not a
+                        substitution; the same statement in one vocabulary.
+       amber -> EMBER   a warning, and the rail beside a law.
+       red   -> ALERT   a breach.
+
+     So the one-colour rule is not compromised by the retheme. It is the reason
+     the retheme lands. */
+
+  --void:      #070A11;   /* abyss  */
+  --base:      #0B1018;   /* ground */
+  --surface:   #111A28;   /* panel  */
+  --raised:    #162233;   /* panel2 */
+  --line:      #20304a;
+  --line-hi:   #2c4260;
+
+  --ink:       #DDE7F5;
+  --ink-dim:   #9AACC6;
+  --ink-faint: #61738f;
+  --ink-ghost: #364159;
+
+  --green: #56D2E4;   /* cyan  — the System operating */
+  --amber: #E08A4B;   /* ember — a warning */
+  --red:   #E2564D;   /* alert — a breach */
+
+  /* The lit edge. Nothing in Prism used it before because Prism had no
+     line-of-light to draw; it is here so that anything which grows one has the
+     right colour to hand. */
+  --lit:   #96ECFA;
 
   --tier:      var(--green);
-  --tier-glow: rgba(74,222,128,.16);
+  --tier-glow: rgba(86,210,228,.16);
   --tier-pos:  8%;
 
   /* Wallpaper response to load.
@@ -56,13 +88,19 @@
   --desk-tint: 0;
   --desk-dim:  0;
 
-  --r: 4px;
+  /* The System's surfaces are CUT, not rounded. `--r` stays because a hundred
+     rules reference it and a border-radius of 0 is the honest value for a
+     chamfered language — the corner is taken off by clip-path where it matters
+     and left square where it does not. A 4px radius is a perfectly good radius
+     that belongs to a different product. */
+  --r: 0px;
+  --chamfer: 12px;
   --bar: 40px;
   --dock: 62px;
 }
-:root[data-tier="amber"] { --tier: var(--amber); --tier-glow: rgba(251,191,36,.16); --tier-pos: 42%; --desk-sat: .55; --desk-tint: .16; --desk-dim: .12; }
-:root[data-tier="red"]   { --tier: var(--red);   --tier-glow: rgba(251,113,133,.18); --tier-pos: 74%; --desk-sat: .22; --desk-tint: .30; --desk-dim: .26; }
-:root[data-tier="black"] { --tier: var(--red);   --tier-glow: rgba(251,113,133,.30); --tier-pos: 95%; --desk-sat: 0;   --desk-tint: .42; --desk-dim: .40; }
+:root[data-tier="amber"] { --tier: var(--amber); --tier-glow: rgba(224,138,75,.16); --tier-pos: 42%; --desk-sat: .55; --desk-tint: .16; --desk-dim: .12; }
+:root[data-tier="red"]   { --tier: var(--red);   --tier-glow: rgba(226,86,77,.18); --tier-pos: 74%; --desk-sat: .22; --desk-tint: .30; --desk-dim: .26; }
+:root[data-tier="black"] { --tier: var(--red);   --tier-glow: rgba(226,86,77,.30); --tier-pos: 95%; --desk-sat: 0;   --desk-tint: .42; --desk-dim: .40; }
 
 body {
   margin: 0; height: 100vh; overflow: hidden;
@@ -85,10 +123,10 @@ body {
 #deskbg {
   position: absolute; inset: 0; z-index: 0; pointer-events: none;
   background:
-    radial-gradient(70% 55% at 18% 12%,  rgba(74,222,128,.07), transparent 62%),
+    radial-gradient(70% 55% at 18% 12%,  rgba(86,210,228,.07), transparent 62%),
     radial-gradient(60% 50% at 82% 22%,  rgba(96,165,250,.06), transparent 60%),
-    radial-gradient(75% 60% at 62% 96%,  rgba(251,113,133,.05), transparent 65%),
-    radial-gradient(50% 40% at 38% 72%,  rgba(251,191,36,.035), transparent 60%),
+    radial-gradient(75% 60% at 62% 96%,  rgba(226,86,77,.05), transparent 65%),
+    radial-gradient(50% 40% at 38% 72%,  rgba(224,138,75,.035), transparent 60%),
     linear-gradient(165deg, #0a0d13 0%, #070810 55%, #05060a 100%);
   filter: saturate(var(--desk-sat)) brightness(calc(1 - var(--desk-dim)));
   transition: filter 1.1s cubic-bezier(.4,0,.2,1);
@@ -230,8 +268,13 @@ body {
   background: linear-gradient(0deg, rgba(15,17,22,.94), rgba(10,12,16,.82));
   backdrop-filter: blur(20px); border-top: 1px solid var(--line);
 }
+/* A rounded dock item beside a chamfered window is two products in one
+   screenshot. 6px rather than the window's 12: the chamfer should read as
+   proportional to the surface, and at 42px square a 12px cut is an octagon. */
 .dockitem {
-  position: relative; width: 42px; height: 42px; border-radius: 9px;
+  position: relative; width: 42px; height: 42px; border-radius: 0;
+  clip-path: polygon(6px 0, calc(100% - 6px) 0, 100% 6px, 100% calc(100% - 6px),
+    calc(100% - 6px) 100%, 6px 100%, 0 calc(100% - 6px), 0 6px);
   display: grid; place-items: center; cursor: pointer;
   color: var(--ink-faint); border: 1px solid transparent;
   transition: color .16s, background .16s, border-color .16s, transform .18s cubic-bezier(.2,.9,.3,1.4);
@@ -261,21 +304,61 @@ body {
   background: rgba(13,15,20,.86);
   backdrop-filter: blur(22px) saturate(1.15);
   border: 1px solid var(--line);
-  border-radius: 7px;
+  /* CUT, not rounded. A 7px radius is a perfectly good radius and it belongs to
+     a different product. The chamfer is the single mark that makes a window
+     read as the System's before anything in it is read at all. */
+  border-radius: 0;
+  clip-path: polygon(
+    var(--chamfer) 0, calc(100% - var(--chamfer)) 0, 100% var(--chamfer),
+    100% calc(100% - var(--chamfer)), calc(100% - var(--chamfer)) 100%,
+    var(--chamfer) 100%, 0 calc(100% - var(--chamfer)), 0 var(--chamfer));
   box-shadow: 0 26px 64px -18px rgba(0,0,0,.9), 0 0 0 1px rgba(0,0,0,.5);
   animation: rise .34s cubic-bezier(.2,.9,.25,1) backwards;
   min-width: 280px; min-height: 160px;
 }
 @keyframes rise { from { opacity: 0; transform: translateY(14px) scale(.97); } to { opacity: 1; transform: none; } }
 .win.min { display: none; }
-.win.max { border-radius: 0; }
+/* Maximised: no chamfer. A full-screen surface with its corners cut leaves
+   four notches of desktop showing through, which reads as a rendering fault. */
+.win.max { border-radius: 0; clip-path: none; }
 .win.focus { border-color: var(--line-hi); box-shadow: 0 32px 74px -18px rgba(0,0,0,.95), 0 0 0 1px var(--tier-glow); }
-.win.focus .bracket { opacity: .5; }
-.bracket { position: absolute; width: 9px; height: 9px; pointer-events: none; border-color: var(--tier); opacity: 0; transition: opacity .25s, border-color .5s; }
-.bracket.tl { top:-1px; left:-1px;  border-top:1.5px solid; border-left:1.5px solid;  border-radius:7px 0 0 0; }
-.bracket.tr { top:-1px; right:-1px; border-top:1.5px solid; border-right:1.5px solid; border-radius:0 7px 0 0; }
-.bracket.bl { bottom:-1px; left:-1px;  border-bottom:1.5px solid; border-left:1.5px solid;  border-radius:0 0 0 7px; }
-.bracket.br { bottom:-1px; right:-1px; border-bottom:1.5px solid; border-right:1.5px solid; border-radius:0 0 7px 0; }
+/* Corner brackets — the System's second mark after the chamfer.
+   
+   These existed already and were invisible: rounded, `opacity: 0` until the
+   window took focus, and static. Three changes, and all three are the point.
+   
+   They are CUT to match the corner. They are always present, because a bracket
+   that only appears on focus is a focus indicator rather than an identity — the
+   focused window gets a brighter one instead. And they BREATHE, on 6.7s, which
+   divides into none of the other periods on screen, so a desktop of windows
+   never pulses in unison and nothing on it is visibly a loop. */
+.bracket {
+  position: absolute; width: 14px; height: 14px; pointer-events: none;
+  border-color: var(--tier); opacity: .30;
+  transition: opacity .25s, border-color .5s;
+  animation: brkbreathe 6.7s ease-in-out infinite;
+}
+.win.focus .bracket { opacity: .85; }
+@keyframes brkbreathe { 0%,100% { filter: brightness(.78) } 50% { filter: brightness(1.15) } }
+.bracket.tl { top:-1px; left:var(--chamfer);  border-top:2px solid; }
+.bracket.tl2 { top:var(--chamfer); left:-1px; border-left:2px solid; }
+.bracket.tr { top:-1px; right:var(--chamfer); border-top:2px solid; }
+.bracket.tr2 { top:var(--chamfer); right:-1px; border-right:2px solid; }
+.bracket.bl { bottom:-1px; left:var(--chamfer);  border-bottom:2px solid; }
+.bracket.bl2 { bottom:var(--chamfer); left:-1px; border-left:2px solid; }
+.bracket.br { bottom:-1px; right:var(--chamfer); border-bottom:2px solid; }
+.bracket.br2 { bottom:var(--chamfer); right:-1px; border-right:2px solid; }
+.win.max .bracket { display: none; }
+
+/* The lit edge on the focused window. This is what says THIS ONE — cheaper to
+   read than a colour change and quieter than a heavier border. */
+.win.focus > .litedge {
+  content: ""; position: absolute; left: var(--chamfer); right: var(--chamfer);
+  top: 0; height: 1.6px; pointer-events: none;
+  background: linear-gradient(90deg, transparent, var(--lit) 30%, var(--lit) 72%, transparent);
+  opacity: .85;
+}
+.litedge { position: absolute; opacity: 0; }
 
 .tbar { display: flex; align-items: center; gap: 8px; height: 33px; padding: 0 9px; border-bottom: 1px solid var(--line); cursor: grab; flex: 0 0 auto; }
 .tbar:active { cursor: grabbing; }
@@ -357,9 +440,9 @@ body {
 .pv .frame {
   width: 100%; aspect-ratio: 4/3; border-radius: var(--r); border: 1px solid var(--line);
   background:
-    radial-gradient(60% 60% at 32% 28%, rgba(74,222,128,.14), transparent 60%),
+    radial-gradient(60% 60% at 32% 28%, rgba(86,210,228,.14), transparent 60%),
     radial-gradient(55% 55% at 72% 66%, rgba(96,165,250,.14), transparent 60%),
-    radial-gradient(50% 50% at 50% 92%, rgba(251,113,133,.10), transparent 60%),
+    radial-gradient(50% 50% at 50% 92%, rgba(226,86,77,.10), transparent 60%),
     linear-gradient(150deg,#11141b,#080a0f);
   display: grid; place-items: center; color: var(--ink-ghost); font-size: 10px; letter-spacing: .2em; text-transform: uppercase;
 }
@@ -439,7 +522,7 @@ body {
   transition: background .12s ease, border-color .12s ease;
 }
 .wstile:hover { background: rgba(255,255,255,.06); border-color: var(--line-hi); }
-.wstile.on { border-color: var(--green); background: rgba(74,222,128,.08); }
+.wstile.on { border-color: var(--green); background: rgba(86,210,228,.08); }
 /* The number sits behind the preview, so an empty workspace still reads as a
    numbered place rather than an empty box. */
 .wstile .n {
@@ -455,7 +538,7 @@ body {
   position: absolute; border: 1px solid var(--ink-ghost); border-radius: 1px;
   background: rgba(255,255,255,.09); box-sizing: border-box;
 }
-.wstile.on .wsmini i { border-color: var(--green); background: rgba(74,222,128,.16); }
+.wstile.on .wsmini i { border-color: var(--green); background: rgba(86,210,228,.16); }
 
 .lchsys { display: flex; flex-direction: column; gap: 2px; }
 
@@ -575,8 +658,8 @@ body {
 /* Keyboard cursor, distinct from selection: one is where you are, the other
    is what you have chosen, and conflating them makes multi-select unreadable. */
 .f.cursor { background: rgba(255,255,255,.055); box-shadow: inset 2px 0 0 var(--ink-faint); }
-.f.sel { background: rgba(74,222,128,.10); box-shadow: inset 2px 0 0 var(--green); }
-.f.cursor.sel { background: rgba(74,222,128,.16); }
+.f.sel { background: rgba(86,210,228,.10); box-shadow: inset 2px 0 0 var(--green); }
+.f.cursor.sel { background: rgba(86,210,228,.16); }
 .pkfoot { display: flex; align-items: center; gap: 8px; }
 .pksel { font-size: 11px; color: var(--ink-ghost); margin-right: auto; }
 .pkok:disabled { opacity: .4; cursor: default; }
@@ -640,7 +723,7 @@ body {
 .gal .hud .nm { color: var(--ink-dim); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gal .hud .tbadge {
   font-size: 9.5px; letter-spacing: .14em; text-transform: uppercase;
-  color: var(--amber); border: 1px solid rgba(251,191,36,.35);
+  color: var(--amber); border: 1px solid rgba(224,138,75,.35);
   border-radius: 2px; padding: 1px 6px; margin-left: auto;
 }
 .gal .hud .tbadge + .ct { margin-left: 10px; }
@@ -682,8 +765,8 @@ body {
   letter-spacing: .14em; text-transform: uppercase; border: 1px solid var(--line-hi);
   color: var(--ink-ghost);
 }
-.termbadge.live { color: var(--green); border-color: rgba(74,222,128,.4); }
-.termbadge.det  { color: var(--amber); border-color: rgba(251,191,36,.4); }
+.termbadge.live { color: var(--green); border-color: rgba(86,210,228,.4); }
+.termbadge.det  { color: var(--amber); border-color: rgba(224,138,75,.4); }
 
 /* Facets */
 .facet { border: 1px solid var(--line); border-radius: var(--r); padding: 10px 11px; margin-bottom: 8px; background: var(--base); }
@@ -716,7 +799,7 @@ body {
 .acts { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
 .btn { font: inherit; font-size: 10.5px; letter-spacing: .11em; text-transform: uppercase; padding: 4px 10px; border-radius: 2px; cursor: pointer; background: transparent; border: 1px solid var(--line-hi); color: var(--ink-faint); transition: .15s; }
 .btn:hover { color: var(--ink); border-color: var(--ink-faint); background: var(--raised); }
-.btn.danger:hover { color: var(--red); border-color: var(--red); background: rgba(251,113,133,.07); }
+.btn.danger:hover { color: var(--red); border-color: var(--red); background: rgba(226,86,77,.07); }
 
 /* ── Command palette ─────────────────────────────────────── */
 #palette { position: fixed; inset: 0; z-index: 700; display: none; background: rgba(3,4,6,.55); backdrop-filter: blur(6px); }
@@ -767,19 +850,79 @@ body {
 }
 #login.hide { display: none; }
 .lg {
-  width: min(340px, 88vw); text-align: center;
+  width: min(380px, 90vw); text-align: center;
   animation: rise .5s cubic-bezier(.2,.9,.25,1) backwards;
 }
-.lg .m { margin-bottom: 22px; display: flex; justify-content: center; }
-.lg h1 { font-size: 11.5px; letter-spacing: .34em; text-transform: uppercase; font-weight: 500; margin: 0 0 6px; }
+.lg .m { display: none; }   /* the body is the mark now */
+
+/* ── The body ────────────────────────────────────────────────────────────
+   Prism's third renderer of the constellation. QML draws it on the desktop,
+   Compose draws it on the phone, and this draws it here — no shared code
+   between them and every value the same, which is the whole bargain of a token
+   source.
+
+   It sits on the sign-in screen because that is the first thing seen every
+   time, and because a System that is waiting for you should look like it is
+   waiting rather than like a form. */
+.lg .body { display: block; margin: 0 auto -6px; width: 300px; height: 280px; }
+
+/* The card is CHAMFERED and BRACKETED — the two marks that make a surface the
+   System's rather than merely dark. The brackets breathe on a period that
+   divides into none of the others, so the composite never returns to where it
+   started and nothing here is ever visibly a loop. */
+.lg .card {
+  position: relative;
+  padding: 22px 20px 18px;
+  background: linear-gradient(160deg, var(--surface), rgba(11,16,24,.55));
+  border: 1px solid var(--line-hi);
+  clip-path: polygon(
+    var(--chamfer) 0, calc(100% - var(--chamfer)) 0, 100% var(--chamfer),
+    100% calc(100% - var(--chamfer)), calc(100% - var(--chamfer)) 100%,
+    var(--chamfer) 100%, 0 calc(100% - var(--chamfer)), 0 var(--chamfer));
+}
+/* The lit edge: the top of a System surface catches light. */
+.lg .card::before {
+  content: ""; position: absolute; left: var(--chamfer); right: var(--chamfer); top: 0;
+  height: 1.6px;
+  background: linear-gradient(90deg, transparent, var(--lit) 30%, var(--lit) 72%, transparent);
+  opacity: .9;
+}
+.lg .brk { position: absolute; inset: 0; pointer-events: none; }
+.lg .brk i {
+  position: absolute; display: block; background: var(--lit); opacity: .85;
+  animation: brk 6.7s ease-in-out infinite;
+}
+.lg .brk i.h { height: 2px; width: 16px; }
+.lg .brk i.v { width: 2px; height: 16px; }
+.lg .brk .tl-h { top: 0; left: var(--chamfer); }
+.lg .brk .tl-v { top: var(--chamfer); left: 0; }
+.lg .brk .tr-h { top: 0; right: var(--chamfer); }
+.lg .brk .tr-v { top: var(--chamfer); right: 0; }
+.lg .brk .bl-h { bottom: 0; left: var(--chamfer); }
+.lg .brk .bl-v { bottom: var(--chamfer); left: 0; }
+.lg .brk .br-h { bottom: 0; right: var(--chamfer); }
+.lg .brk .br-v { bottom: var(--chamfer); right: 0; }
+@keyframes brk { 0%,100% { opacity: .45 } 50% { opacity: .95 } }
+
+.lg h1 {
+  font-family: var(--display);
+  font-size: 26px; letter-spacing: .18em; font-weight: 700;
+  color: var(--ink);
+}
+.lg p { color: var(--ink-dim); }
+.lg .hint { color: var(--ink-faint); }
+.lg h1 { text-transform: uppercase; margin: 0 0 6px; }
 .lg p { color: var(--ink-faint); font-size: 11.5px; margin: 0 0 20px; }
 .lg input {
   width: 100%; padding: 12px 14px; font: inherit; font-size: 20px; text-align: center;
   letter-spacing: .5em; text-indent: .5em;
-  background: var(--surface); border: 1px solid var(--line-hi); border-radius: var(--r);
-  color: var(--ink); outline: none; transition: border-color .18s;
+  background: rgba(7,10,17,.55); border: 1px solid var(--line-hi); border-radius: 0;
+  color: var(--ink); outline: none; transition: border-color .18s, box-shadow .18s;
 }
-.lg input:focus { border-color: var(--ink-faint); }
+.lg input:focus {
+  border-color: var(--green);
+  box-shadow: 0 0 0 1px rgba(86,210,228,.22), 0 0 22px -8px var(--green);
+}
 .lg .msg { min-height: 18px; margin-top: 12px; font-size: 11.5px; color: var(--red); }
 .lg .hint { margin-top: 20px; font-size: 10.5px; color: var(--ink-ghost); line-height: 1.7; }
 .lg .hint a { color: var(--ink-faint); cursor: pointer; text-decoration: underline; }
@@ -800,11 +943,11 @@ body {
 <div id="topbar">
   <button class="mark" id="sysmenu" aria-haspopup="true" aria-expanded="false">
     <svg width="24" height="18" viewBox="0 0 24 18" fill="none" aria-hidden="true">
-      <path d="M0 8.2 H7.4" stroke="#e8ebf0" stroke-width="1.1"/>
-      <path d="M8 14.4 L13.4 3.2 L18.8 14.4 Z" stroke="#5c6472" stroke-width="1.1" fill="none"/>
-      <path d="M18.2 11.1 H24" stroke="#4ade80" stroke-width="1.1"/>
-      <path d="M18.4 12.5 H24" stroke="#fbbf24" stroke-width="1.1"/>
-      <path d="M18.6 13.9 H24" stroke="#fb7185" stroke-width="1.1"/>
+      <path d="M0 8.2 H7.4" stroke="#DDE7F5" stroke-width="1.1"/>
+      <path d="M8 14.4 L13.4 3.2 L18.8 14.4 Z" stroke="#61738f" stroke-width="1.1" fill="none"/>
+      <path d="M18.2 11.1 H24" stroke="#56D2E4" stroke-width="1.1"/>
+      <path d="M18.4 12.5 H24" stroke="#E08A4B" stroke-width="1.1"/>
+      <path d="M18.6 13.9 H24" stroke="#E2564D" stroke-width="1.1"/>
     </svg>
     <span class="word">Prism</span>
   </button>
@@ -875,13 +1018,20 @@ body {
 
 <div id="login">
   <div class="lg">
-    <div class="m">
+    <canvas class="body" id="sgbody" width="300" height="280"
+            aria-label="A constellation of points, turning slowly."></canvas>
+    <div class="card">
+      <div class="brk" aria-hidden="true">
+        <i class="h tl-h"></i><i class="v tl-v"></i><i class="h tr-h"></i><i class="v tr-v"></i>
+        <i class="h bl-h"></i><i class="v bl-v"></i><i class="h br-h"></i><i class="v br-v"></i>
+      </div>
+    <div class="m" hidden>
       <svg width="40" height="30" viewBox="0 0 24 18" fill="none">
-        <path d="M0 8.2 H7.4" stroke="#e8ebf0" stroke-width="1.1"/>
-        <path d="M8 14.4 L13.4 3.2 L18.8 14.4 Z" stroke="#5c6472" stroke-width="1.1" fill="none"/>
-        <path d="M18.2 11.1 H24" stroke="#4ade80" stroke-width="1.1"/>
-        <path d="M18.4 12.5 H24" stroke="#fbbf24" stroke-width="1.1"/>
-        <path d="M18.6 13.9 H24" stroke="#fb7185" stroke-width="1.1"/>
+        <path d="M0 8.2 H7.4" stroke="#DDE7F5" stroke-width="1.1"/>
+        <path d="M8 14.4 L13.4 3.2 L18.8 14.4 Z" stroke="#61738f" stroke-width="1.1" fill="none"/>
+        <path d="M18.2 11.1 H24" stroke="#56D2E4" stroke-width="1.1"/>
+        <path d="M18.4 12.5 H24" stroke="#E08A4B" stroke-width="1.1"/>
+        <path d="M18.6 13.9 H24" stroke="#E2564D" stroke-width="1.1"/>
       </svg>
     </div>
     <h1>Prism</h1>
@@ -891,6 +1041,7 @@ body {
     <div class="hint">
       <span id="loginHint"></span><br>
       <a id="loginSwap">use the other method</a> · no JavaScript? <b>/rescue</b>
+    </div>
     </div>
   </div>
 </div>
@@ -1000,7 +1151,11 @@ function makeWindow({ id, app, title, meta = '', w = 380, h = 320, x, y, args, c
   el.className = 'win';
   el.style.cssText = `left:${x}px;top:${y}px;width:${w}px;height:${h}px;z-index:${++zTop}`;
   el.innerHTML =
-    `<i class="bracket tl"></i><i class="bracket tr"></i><i class="bracket bl"></i><i class="bracket br"></i>
+    `<i class="litedge"></i>` +
+    `<i class="bracket tl"></i><i class="bracket tl2"></i>` +
+    `<i class="bracket tr"></i><i class="bracket tr2"></i>` +
+    `<i class="bracket bl"></i><i class="bracket bl2"></i>` +
+    `<i class="bracket br"></i><i class="bracket br2"></i>
      <header class="tbar"><span class="name">${title}</span><span class="meta">${meta}</span>
        <span class="wbtns"><button class="wb n" title="Minimise"></button><button class="wb m" title="Maximise"></button><button class="wb c" title="Close"></button></span>
      </header>
@@ -2360,7 +2515,7 @@ function pickSource(facetName, hostName, doc) {
       g.textContent = glyph; t.textContent = title; sb.textContent = sub;
       btn.onmouseenter = () => { btn.style.background = 'rgba(255,255,255,.075)'; btn.style.borderColor = '#2c313d'; };
       btn.onmouseleave = () => { btn.style.background = 'rgba(255,255,255,.025)'; btn.style.borderColor = '#1c2029'; };
-      btn.onfocus = () => { btn.style.borderColor = '#4ade80'; };
+      btn.onfocus = () => { btn.style.borderColor = '#56D2E4'; };
       btn.onblur = () => { btn.style.borderColor = '#1c2029'; };
       return btn;
     };
@@ -2763,14 +2918,20 @@ function appTerminal(existingId) {
     scrollback: 5000,
     allowProposedApi: true,
     drawBoldTextInBrightColors: false,
+    // The terminal's own palette. The NEUTRALS follow the identity so a terminal
+    // sits in the shell rather than on it; the ANSI COLOURS deliberately do not.
+    // They are not decoration — they are what `ls`, `git diff` and every TUI on
+    // this machine render through, and a green that is actually cyan makes a
+    // diff unreadable. The one place in the product where the identity yields,
+    // and it yields to something that matters more.
     theme: {
-      background: '#06070a', foreground: '#cfd6df', cursor: '#e8ebf0',
-      selectionBackground: 'rgba(255,255,255,.16)',
-      black: '#0a0c10', red: '#fb7185', green: '#4ade80', yellow: '#fbbf24',
+      background: '#070A11', foreground: '#DDE7F5', cursor: '#96ECFA',
+      selectionBackground: 'rgba(86,210,228,.20)',
+      black: '#0B1018', red: '#fb7185', green: '#4ade80', yellow: '#fbbf24',
       blue: '#60a5fa', magenta: '#c084fc', cyan: '#67e8f9', white: '#cfd6df',
-      brightBlack: '#5c6472', brightRed: '#fda4af', brightGreen: '#86efac',
+      brightBlack: '#61738f', brightRed: '#fda4af', brightGreen: '#86efac',
       brightYellow: '#fcd34d', brightBlue: '#93c5fd', brightMagenta: '#d8b4fe',
-      brightCyan: '#a5f3fc', brightWhite: '#e8ebf0'
+      brightCyan: '#a5f3fc', brightWhite: '#DDE7F5'
     }
   });
   const fit = new FitAddon.FitAddon();
@@ -3624,7 +3785,12 @@ function paintVitals(d) {
 function setTier(t) {
   tier = t;
   root.dataset.tier = t;
-  $('#tierWord').textContent = t[0].toUpperCase() + t.slice(1);
+  // The tier's NAME stays green/amber/red/black in the governor, the API and
+  // the timeline — it is a domain model and renaming it would churn every
+  // consumer. Only the word on screen changes, because "GREEN" beside a cyan
+  // light is the retheme showing its own seam.
+  const TIER_WORD = { green: 'Clear', amber: 'Strain', red: 'Critical', black: 'Breach' };
+  $('#tierWord').textContent = TIER_WORD[t] || (t[0].toUpperCase() + t.slice(1));
   $('#critical').classList.toggle('show', t === 'black');
 }
 
@@ -3778,5 +3944,143 @@ async function boot() {
   }
 }
 boot();
+})();
+</script>
+
+<script>
+/* Stargazer's body, third renderer.
+ *
+ * A port of body/Constellation.js — the same Fibonacci shell, the same spring
+ * constants, the same emissive falloff, and the same incommensurate periods, so
+ * this settles the way the other two settle. It draws idle and nothing else:
+ * Prism has no quests to show and no voice to speak with, and a formation with
+ * nothing behind it would be decoration.
+ *
+ * Deliberately self-contained and defensive. It runs on the sign-in screen,
+ * which is the one screen that must render when everything else is broken — so
+ * it cannot be the reason the page fails, and every entry point is guarded.
+ */
+(() => {
+  const c = document.getElementById('sgbody');
+  if (!c || !c.getContext) return;
+  const ctx = c.getContext('2d');
+  if (!ctx) return;
+  const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  const N = 26, TAU = Math.PI * 2, GOLDEN = 2.399963229728653;
+  /* Draw at device resolution and let CSS scale it down. A radial falloff at
+     1x banding on a high-DPI screen is the one artefact that would make this
+     look cheap next to the other two renderers. */
+  const DPR = Math.min(2, window.devicePixelRatio || 1);
+  const CSS_W = c.width, CSS_H = c.height;
+  c.width = CSS_W * DPR; c.height = CSS_H * DPR;
+  c.style.width = CSS_W + 'px'; c.style.height = CSS_H + 'px';
+  ctx.scale(DPR, DPR);
+  const W = CSS_W, H = CSS_H, MID_X = W / 2, MID_Y = H / 2;
+  const RAD = Math.min(W, H) * 0.36, U = RAD / 94;
+  const CY = [120, 224, 238], WH = [235, 252, 255];
+
+  const rgba = (col, a) =>
+    'rgba(' + (col[0] | 0) + ',' + (col[1] | 0) + ',' + (col[2] | 0) + ',' + Math.min(1, a).toFixed(3) + ')';
+
+  const pts = [];
+  for (let i = 0; i < N; i++) {
+    pts.push({ i, ph: i * 1.7, sp: 0.6 + (i % 7) * 0.11,
+               x: MID_X, y: MID_Y, vx: 0, vy: 0, sx: MID_X, sy: MID_Y, dep: 0.5 });
+  }
+
+  function fib(k, n) {
+    const y = 1 - (k / Math.max(1, n - 1)) * 2;
+    const r = Math.sqrt(Math.max(0, 1 - y * y)), th = k * GOLDEN;
+    return [Math.cos(th) * r, y, Math.sin(th) * r];
+  }
+  function rot(x, y, z, yaw, pit) {
+    const cy = Math.cos(yaw), sy = Math.sin(yaw);
+    const x1 = x * cy - z * sy, z1 = x * sy + z * cy;
+    const cp = Math.cos(pit), sp = Math.sin(pit);
+    return [x1, y * cp - z1 * sp, y * sp + z1 * cp];
+  }
+
+  /* Fixed timestep. A variable one makes the level of detail flicker, because
+     the same frame does different work depending on how long the last took. */
+  const STEP = 0.016;
+  let t = 0, acc = 0, last = 0;
+
+  function step() {
+    t += STEP;
+    const swim = 3.2 * U;
+    for (const q of pts) {
+      let tx, ty;
+      if (q.i === 0) { tx = MID_X; ty = MID_Y; q.dep = 0.98; }
+      else {
+        const v = rot(...fib(q.i - 1, N - 1), t * 0.20, 0.38);
+        tx = MID_X + v[0] * RAD; ty = MID_Y + v[1] * RAD;
+        q.dep = 0.5 + v[2] * 0.5;
+      }
+      tx += Math.sin(t * q.sp * 0.9 + q.ph) * swim;
+      ty += Math.cos(t * q.sp * 0.7 + q.ph * 1.3) * swim;
+      q.vx = (q.vx + (tx - q.x) * 0.062) * 0.84;
+      q.vy = (q.vy + (ty - q.y) * 0.062) * 0.84;
+      q.x += q.vx; q.y += q.vy;
+      q.sx = q.x; q.sy = q.y;
+    }
+  }
+
+  function draw() {
+    ctx.clearRect(0, 0, W, H);
+    ctx.globalCompositeOperation = 'lighter';
+
+    /* Lines between genuine near neighbours, fading with distance — structure
+       discovered rather than declared. The threshold is 0.62 of the radius; at
+       roughly half that the shell comes apart into disconnected stubs. */
+    const thr = RAD * 0.62;
+    ctx.lineWidth = Math.max(1, U * 0.9);
+    for (let i = 0; i < N; i++) {
+      for (let j = i + 1; j < N; j++) {
+        const dx = pts[i].sx - pts[j].sx, dy = pts[i].sy - pts[j].sy;
+        const d = Math.sqrt(dx * dx + dy * dy);
+        if (d >= thr) continue;
+        ctx.strokeStyle = rgba(CY, 0.26 * (1 - d / thr));
+        ctx.beginPath(); ctx.moveTo(pts[i].sx, pts[i].sy); ctx.lineTo(pts[j].sx, pts[j].sy); ctx.stroke();
+      }
+    }
+
+    /* A star is EMITTED light, not a painted disc: a flat fill has a hard edge,
+       and under additive blending two overlapping stars show the lens where
+       they cross. Peak alpha stays low so the SUM does the brightening — past
+       alpha 1 an additive source clips, and the clip boundary is itself an
+       edge. */
+    for (const q of pts) {
+      const core = q.i === 0;
+      const sz = (1.05 + q.dep * 1.05) * U * (core ? 1.20 : 1.0);
+      const reach = sz * 4.4;
+      const peak = (0.30 + q.dep * 0.16) * (core ? 1.30 : 1.05) * 0.88;
+      const g = ctx.createRadialGradient(q.sx, q.sy, 0, q.sx, q.sy, reach);
+      g.addColorStop(0.00, rgba(WH, peak));
+      g.addColorStop(0.05, rgba(WH, peak * 0.66));
+      g.addColorStop(0.14, rgba(CY, peak * 0.34));
+      g.addColorStop(0.30, rgba(CY, peak * 0.13));
+      g.addColorStop(1.00, rgba(CY, 0));
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.arc(q.sx, q.sy, reach, 0, TAU); ctx.fill();
+    }
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
+  function frame(now) {
+    if (last) acc += Math.min(0.25, (now - last) / 1000);
+    last = now;
+    let steps = 0;
+    while (acc >= STEP && steps < 4) { step(); acc -= STEP; steps++; }
+    if (steps === 4) acc = 0;
+    draw();
+    requestAnimationFrame(frame);
+  }
+
+  /* Settle before the first paint, so the shell is a shell rather than a dot
+     that explodes outward the moment anyone looks at it. */
+  for (let i = 0; i < 200; i++) step();
+  draw();
+  if (!reduce) requestAnimationFrame(frame);
 })();
 </script>

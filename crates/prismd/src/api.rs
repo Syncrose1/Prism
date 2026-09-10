@@ -8,9 +8,9 @@
 
 use axum::{
     Json, Router,
-    extract::State,
+    extract::{Query, State},
     http::{HeaderMap, StatusCode},
-    response::{IntoResponse, Response},
+    response::{IntoResponse, Redirect, Response},
     routing::{get, post},
 };
 use prism_core::auth::{AuthOutcome, Authenticator, CodeOutcome, LoginPrompt, Sensitivity, totp};
@@ -20,7 +20,7 @@ use prism_core::sensors::disk::MountUsage;
 use prism_core::sensors::memory::MemorySnapshot;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, RwLock};
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 /// The latest reading, published by the monitor loop and read by the API.
 ///
@@ -85,6 +85,11 @@ pub type SharedVitals = Arc<RwLock<Vitals>>;
 #[derive(Clone)]
 pub struct AppState {
     pub auth: Arc<Authenticator>,
+    /// Signing in from the machine Prism runs on, without reaching for a phone
+    /// that is guarding a secret already sitting on this disk. See
+    /// `prism_core::auth::console`.
+    pub console_key: Arc<String>,
+    pub grants: Arc<prism_core::auth::console::Grants>,
     /// The port Prism itself is serving on, so the discovery sweep does not
     /// offer the operator their own desktop as an app to add to it.
     pub port: u16,
@@ -109,6 +114,8 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/api/health", get(health))
         .route("/api/auth/login", post(login))
+        .route("/api/auth/console", post(console_grant))
+        .route("/auth/console", get(console_redeem))
         .route("/api/auth/prompt", get(login_prompt))
         .route("/api/auth/logout", post(logout))
         .route("/api/vitals", get(vitals))
@@ -285,6 +292,82 @@ async fn logout() -> Response {
 
 /// What the login screen should ask for. Public: it reveals only whether *this*
 /// browser is already enrolled, which that browser necessarily knows.
+#[derive(Deserialize)]
+struct ConsoleKeyRequest {
+    key: String,
+}
+
+#[derive(Serialize)]
+struct ConsoleGrantResponse {
+    grant: String,
+}
+
+/// Exchange the console key for a single-use grant.
+///
+/// Holding the key means being able to read a 0600 file in the state directory,
+/// which is the same capability as reading `totp.secret` and minting codes
+/// forever. This does not widen anything; it makes an already-open door
+/// convenient instead of pretending it is shut.
+async fn console_grant(
+    State(state): State<AppState>,
+    Json(body): Json<ConsoleKeyRequest>,
+) -> Response {
+    use prism_core::auth::console;
+    if !console::key_matches(&state.console_key, &body.key) {
+        // Deliberately identical to any other refusal, and deliberately NOT
+        // counted toward the authenticator's lockout: a wrong console key must
+        // not be able to lock the real operator out of their phone route.
+        warn!("console key rejected");
+        return err_json(StatusCode::UNAUTHORIZED, "bad_key", "console key not recognised");
+    }
+    match state.grants.mint(totp::now_unix()) {
+        Ok(grant) => Json(ConsoleGrantResponse { grant }).into_response(),
+        Err(e) => {
+            error!(err = %e, "could not mint a console grant");
+            err_json(StatusCode::INTERNAL_SERVER_ERROR, "no_grant", "could not mint a grant")
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct ConsoleRedeem {
+    grant: String,
+}
+
+/// Spend a grant and land in the shell, signed in.
+///
+/// A redirect rather than JSON, because the point is that a browser opened by
+/// `prismd open` arrives already authenticated with no page in between. The
+/// cookies are set here, server-side, so they keep `HttpOnly` — a token handed
+/// to JavaScript to set for itself would not.
+async fn console_redeem(
+    State(state): State<AppState>,
+    Query(q): Query<ConsoleRedeem>,
+) -> Response {
+    let now = totp::now_unix();
+    if !state.grants.spend(&q.grant, now) {
+        warn!("console grant refused (spent, expired, or never issued)");
+        return err_json(
+            StatusCode::UNAUTHORIZED,
+            "bad_grant",
+            "that grant is spent or expired — run `prismd open` again",
+        );
+    }
+    let policy = *state.auth.policy();
+    let (session, device) = state.auth.issue_console_session(now);
+    info!("signed in from the console");
+
+    let mut response = Redirect::to("/").into_response();
+    let out = response.headers_mut();
+    if let Ok(v) = session_cookie(&session, policy.session_ttl_secs).parse() {
+        out.append(axum::http::header::SET_COOKIE, v);
+    }
+    if let Ok(v) = device_cookie(&device, policy.device_ttl_secs).parse() {
+        out.append(axum::http::header::SET_COOKIE, v);
+    }
+    response
+}
+
 async fn login_prompt(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let now = totp::now_unix();
     let prompt = state

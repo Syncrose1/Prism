@@ -16,6 +16,7 @@ mod bind;
 mod discover;
 mod monitor;
 mod enrol;
+mod open;
 mod facets_api;
 mod files_api;
 mod media;
@@ -43,6 +44,10 @@ fn main() -> anyhow::Result<()> {
         Some("setup") => {
             return setup::command(&config::config_dir());
         }
+        Some("open") => {
+            let print_only = args.iter().any(|a| a == "--print" || a == "--url");
+            return Ok(open::command(&config::state_dir(), print_only)?);
+        }
         Some("passwd") | Some("password") => {
             return enrol::passwd(&config::state_dir());
         }
@@ -51,6 +56,8 @@ fn main() -> anyhow::Result<()> {
             println!("  prismd                 run the daemon");
             println!("  prismd enrol           show enrolment status");
             println!("  prismd enrol --reset   revoke and replace the authenticator secret");
+            println!("  prismd open            sign in from this machine, no phone needed");
+            println!("  prismd open --print    print the sign-in URL instead of opening it");
             println!("  prismd passwd          set the quick-unlock password");
             println!("  prismd setup           detect this machine and write config");
             return Ok(());
@@ -215,9 +222,18 @@ async fn serve(
         .with_context(|| format!("binding {addr}"))?;
 
     info!(%addr, "prism os listening at http://{addr}/");
+    // The console key exists from the first start, so `prismd open` never has a
+    // first-run case of its own to explain.
+    let console_key = std::sync::Arc::new(
+        prism_core::auth::console::load_or_create_key(&state_dir.join("console.key"))
+            .unwrap_or_default(),
+    );
+
     let app = api::router(api::AppState {
         port: host.server.port,
         auth,
+        console_key,
+        grants: std::sync::Arc::new(prism_core::auth::console::Grants::new()),
         vitals,
         facets,
         terminals,

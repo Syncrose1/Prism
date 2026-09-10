@@ -35,6 +35,7 @@
 //! binds the tailnet interface, so a failure of this module does not expose
 //! Prism to the internet, and vice versa.
 
+pub mod console;
 pub mod password;
 pub mod session;
 pub mod totp;
@@ -223,6 +224,21 @@ impl Authenticator {
             expires_at: now + self.policy.device_ttl_secs,
             kind: TokenKind::Device,
         })
+    }
+
+    /// Mint a session for a console sign-in.
+    ///
+    /// The same pair a correct code produces, and deliberately so: the console
+    /// key proves filesystem access as the owning user, which is the capability
+    /// that could read `totp.secret` and mint codes indefinitely. Issuing
+    /// something weaker here would be theatre, and something stronger would be
+    /// a lie about what was proved.
+    ///
+    /// It bypasses the lockout counter because it is not a guess — there is
+    /// nothing to brute force, and letting it touch the counter would let a
+    /// wrong key lock the operator out of the authenticator route.
+    pub fn issue_console_session(&self, now: u64) -> (String, String) {
+        (self.issue_session(now), self.issue_device(now))
     }
 
     /// Submit a TOTP code. On success, enrol the device *and* unlock a session.
