@@ -298,6 +298,8 @@ mod tests {
             enabled_if: Gate::default(),
             expose: None,
             pty: false,
+            offloads_to_ram: false,
+            graceful: None,
         }
     }
 
@@ -326,6 +328,7 @@ mod tests {
             memory_high: Some("22G".into()),
             memory_max: Some("26G".into()),
             swap_max: Some("6G".into()),
+            ..Default::default()
         };
         assert_eq!(
             limit_properties(&limits),

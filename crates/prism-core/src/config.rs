@@ -187,6 +187,20 @@ pub struct GovernorConfig {
     pub black_disk_free_mib: u64,
     /// Filesystems to watch. Empty means use `sensors::disk::default_paths()`.
     pub disk_paths: Vec<PathBuf>,
+    /// VRAM held back for the foreign process that has not started yet, in MiB.
+    ///
+    /// Not slack: the allocation that fails is the one nobody has made. By the
+    /// time a game has failed to get its buffers, shedding is too late — the
+    /// allocation already errored and the game is already showing a dialog. So
+    /// a governed workload is kept below what it could hold, always, by this
+    /// much. See `sensors::gpu` for why VRAM is governed by foreign demand
+    /// rather than by free memory.
+    pub vram_reserve_mib: u64,
+    /// Overdraft floors: how far past its budget a governed workload is, in
+    /// MiB. Unlike every other threshold here these count *up*.
+    pub amber_vram_overdraft_mib: u64,
+    pub red_vram_overdraft_mib: u64,
+    pub black_vram_overdraft_mib: u64,
     /// How long a threshold must hold before the tier changes, in seconds.
     /// Prevents a single sampling artefact from killing a workload.
     pub sustain_secs: u64,
@@ -208,6 +222,19 @@ impl Default for GovernorConfig {
             red_disk_free_mib: 8192,
             black_disk_free_mib: 2048,
             disk_paths: Vec::new(),
+            // A desktop compositor spike or a browser starting to decode video
+            // is a few hundred MiB; a game is gigabytes but announces itself
+            // within one tick and gets a full shed. One GiB covers the first
+            // without permanently costing the workload the second.
+            vram_reserve_mib: 1024,
+            // Sized to what a shed step can actually recover, so that each tier
+            // corresponds to giving something up rather than to a round number.
+            // On the measured stack: recogniser ~1.5 GiB, synthesiser ~3.9 GiB,
+            // language model ~6 GiB. Amber means the smallest of those has to
+            // go, Red the middle, Black all of it.
+            amber_vram_overdraft_mib: 1,
+            red_vram_overdraft_mib: 2048,
+            black_vram_overdraft_mib: 5120,
             sustain_secs: 10,
         }
     }
@@ -242,6 +269,27 @@ pub struct Facet {
     /// limits, attribution and storm protection as a headless one. See ADR 0003 §3.
     #[serde(default)]
     pub pty: bool,
+    /// Whether this workload answers a VRAM shortage by moving data into RAM.
+    ///
+    /// This is the difference between VRAM pressure that stays on the card and
+    /// VRAM pressure that becomes a memory incident. ComfyUI offloads weights
+    /// to host memory by design — that is its normal policy, not a fallback —
+    /// so crowding it does not free anything, it converts gigabytes of VRAM
+    /// into gigabytes of RAM. llama.cpp with all layers on the GPU does the
+    /// opposite: it fails the allocation and stays put.
+    ///
+    /// Declared rather than detected. Both look identical from outside until
+    /// the spill has already happened, and the whole value of knowing is
+    /// knowing beforehand.
+    #[serde(default)]
+    pub offloads_to_ram: bool,
+    /// What to ask this workload to give back before constraining it.
+    ///
+    /// Optional, and its absence is meaningful: a facet with no hook is one
+    /// Prism can only limit or kill. See `crate::graceful` for why the
+    /// concession is the workload's choice and not Prism's.
+    #[serde(default)]
+    pub graceful: Option<crate::graceful_config::Graceful>,
 }
 
 /// A locally-bound HTTP service to proxy.
@@ -283,6 +331,14 @@ pub struct FacetLimits {
     pub memory_high: Option<String>,
     pub memory_max: Option<String>,
     pub swap_max: Option<String>,
+    /// VRAM this workload should keep itself under, e.g. `"10G"`.
+    ///
+    /// Soft in the strong sense: there is no cgroup controller for VRAM and no
+    /// kernel mechanism that could enforce this, so unlike `memory_max` it is
+    /// not a backstop. It is a number Prism reports to the workload through its
+    /// graceful hook, and a workload that ignores it is not constrained — it is
+    /// merely wrong. Named `_soft` so nothing reads it as a guarantee.
+    pub vram_soft: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -409,5 +465,107 @@ path = "/home/x""#)
         std::fs::write(&path, "server = { port = \"not a number\" }").unwrap();
         assert!(load_or_default::<HostConfig>(&path).is_err());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod documented {
+    use super::*;
+
+    /// The facet block in `docs/architecture.md` §4.3, verbatim.
+    ///
+    /// A test rather than a proofread because this exact document has twice
+    /// shipped a block that could not parse — `[health]` and `tailnet` — and
+    /// `deny_unknown_fields` turns that into a prismd crash-loop rather than a
+    /// warning. A documented example is a promise; this is the only way to keep
+    /// it.
+    #[test]
+    fn the_documented_facet_block_parses() {
+        let toml = r#"
+id   = "comfyui"
+name = "ComfyUI"
+
+command = ["/home/raahats/ComfyUI-Easy-Install/ComfyUI-Easy-Install/run.sh"]
+cwd     = "/home/raahats/ComfyUI-Easy-Install/ComfyUI-Easy-Install"
+
+[limits]
+memory_high = "22G"
+memory_max  = "26G"
+swap_max    = "6G"
+vram_soft   = "10G"
+
+[graceful]
+http_post = { url = "http://127.0.0.1:8188/free",
+              body = '{"unload_models":true,"free_memory":true}' }
+timeout   = "10s"
+
+[expose]
+port  = 8188
+title = "ComfyUI"
+"#;
+        let f: Facet = toml::from_str(toml).expect("documented facet does not parse");
+        assert_eq!(f.limits.vram_soft.as_deref(), Some("10G"));
+        let hook = f.graceful.expect("no graceful hook");
+        assert_eq!(hook.http_post.url, "http://127.0.0.1:8188/free");
+    }
+
+    /// The yield hook in the same section, as Contract's endpoint expects it.
+    #[test]
+    fn the_documented_yield_hook_parses_and_renders() {
+        let toml = r#"
+http_post = { url  = "http://127.0.0.1:8770/yield",
+              body = '{"tier":"{tier}","give_back_mib":{vram_overdraft_mib},"keep_mib":{vram_budget_mib}}' }
+timeout   = "10s"
+"#;
+        let hook: crate::graceful_config::Graceful = toml::from_str(toml).unwrap();
+        let rendered = crate::graceful::Deficit {
+            facet: "stargazer".into(),
+            tier: crate::governor::Tier::Amber,
+            vram_overdraft_mib: Some(600),
+            vram_budget_mib: Some(9533),
+            headroom_mib: 40_000,
+        }
+        .render(&hook.http_post.body);
+        // Must be valid JSON, or Contract's endpoint answers 400 and the shed
+        // silently never happens.
+        let parsed: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+        assert_eq!(parsed["keep_mib"], 9533);
+        assert_eq!(parsed["tier"], "amber");
+    }
+}
+
+#[cfg(test)]
+mod live_profile {
+    /// Load the profile this machine is actually running.
+    ///
+    /// Ignored by default because it depends on a file outside the repo. Run
+    /// before installing a binary that changed the schema: `deny_unknown_fields`
+    /// means a profile that no longer parses is not a warning, it is prismd
+    /// failing to start — and the operator is often not at the machine.
+    #[test]
+    #[ignore]
+    fn the_operators_profile_still_parses() {
+        let path = dirs_profile();
+        let text = match std::fs::read_to_string(&path) {
+            Ok(t) => t,
+            Err(e) => {
+                println!("no profile at {}: {e}", path.display());
+                return;
+            }
+        };
+        match toml::from_str::<super::Profile>(&text) {
+            Ok(p) => println!(
+                "{} parses: {} facets, vram reserve {} MiB",
+                path.display(),
+                p.facet.len(),
+                p.governor.vram_reserve_mib
+            ),
+            Err(e) => panic!("{} NO LONGER PARSES: {e}", path.display()),
+        }
+    }
+
+    fn dirs_profile() -> std::path::PathBuf {
+        let home = std::env::var("HOME").unwrap_or_default();
+        std::path::PathBuf::from(home).join(".config/prism/profile.toml")
     }
 }

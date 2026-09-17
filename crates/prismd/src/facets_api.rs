@@ -325,8 +325,21 @@ async fn create(
             memory_high: body.limits.memory_high,
             memory_max: body.limits.memory_max,
             swap_max: body.limits.swap_max,
+            // Not offered by the UI. A VRAM ceiling is only meaningful
+            // alongside a graceful hook that can act on it, and both are
+            // configured in TOML by someone who knows what the workload can
+            // afford to drop.
+            vram_soft: None,
+            ..Default::default()
         },
         enabled_if: Default::default(),
+        // Not offered by the UI: whether a workload offloads under pressure is
+        // a fact about the software, not a preference, and guessing it wrong in
+        // either direction is worse than leaving it declared in TOML by someone
+        // who knows. False is the safe default — it under-reports a liability
+        // rather than inventing one.
+        offloads_to_ram: false,
+        graceful: None,
         expose: body.expose.map(|port| prism_core::config::Expose {
             port,
             title: body.title.clone().filter(|t| !t.trim().is_empty()),
@@ -399,6 +412,11 @@ async fn update(
             memory_high: body.limits.memory_high.clone(),
             memory_max: body.limits.memory_max.clone(),
             swap_max: body.limits.swap_max.clone(),
+            // Carried over rather than defaulted: the UI does not send this
+            // field, so writing None would silently erase a ceiling set in
+            // TOML the first time anyone adjusted memory from the browser.
+            vram_soft: f.limits.vram_soft.clone(),
+            ..Default::default()
         };
         f.expose = body.expose.map(|port| prism_core::config::Expose {
             port,
@@ -593,6 +611,10 @@ async fn set_limits(
         memory_high: body.memory_high,
         memory_max: body.memory_max,
         swap_max: body.swap_max,
+        // This path writes cgroup attributes, and there is no cgroup
+        // controller for VRAM. Nothing to apply.
+        vram_soft: None,
+        ..Default::default()
     };
     match Supervisor::new().set_limits(&id, &limits) {
         Ok(()) => {
@@ -618,6 +640,8 @@ mod tests {
             enabled_if: Gate::default(),
             expose: None,
             pty: false,
+            offloads_to_ram: false,
+            graceful: None,
         }
     }
 
@@ -654,6 +678,7 @@ mod tests {
             memory_high: Some("22G".into()),
             memory_max: None,
             swap_max: Some("6G".into()),
+            ..Default::default()
         };
         let v = LimitsView::from(&l);
         assert_eq!(v.memory_high.as_deref(), Some("22G"));

@@ -182,11 +182,18 @@ fn main() -> anyhow::Result<()> {
     let monitor_vitals = Arc::clone(&vitals);
     let monitor_terms = Arc::clone(&terminals);
     let monitor_events = Arc::clone(&events);
+    let monitor_facets = Arc::clone(&facets);
     std::thread::Builder::new()
         .name("prism-monitor".into())
         .spawn(move || {
             let mut monitor =
-                monitor::Monitor::new(profile, monitor_vitals, monitor_terms, monitor_events);
+                monitor::Monitor::new(
+                    profile,
+                    monitor_vitals,
+                    monitor_terms,
+                    monitor_events,
+                    monitor_facets,
+                );
             if let Err(e) = monitor.run() {
                 tracing::error!(error = %e, "monitor loop exited");
             }

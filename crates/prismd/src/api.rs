@@ -40,6 +40,27 @@ pub struct Vitals {
     pub compression_ratio: Option<f64>,
     /// Tightest watched filesystem, if disk is being sensed.
     pub disk: Option<DiskVitals>,
+    /// The card, if there is one. Reported split by owner rather than as a
+    /// single used figure, because on this host the two halves mean opposite
+    /// things: see `prism_core::sensors::gpu`.
+    pub vram: Option<VramVitals>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct VramVitals {
+    pub total_mib: u64,
+    /// Held by governed workloads — reclaimable on demand.
+    pub ours_mib: u64,
+    /// Held by everything else — the signal that actually raises the tier.
+    pub foreign_mib: u64,
+    /// What governed workloads may hold right now.
+    pub budget_mib: u64,
+    /// How much they must give back. Zero when within budget.
+    pub overdraft_mib: u64,
+    /// RAM that would be demanded if every offload-capable facet spilled its
+    /// VRAM to host memory. The number that connects a full card to a memory
+    /// incident — see `governor::Reading::spill_liability_mib`.
+    pub spill_liability_mib: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -57,6 +78,7 @@ impl Vitals {
         stall_full: f64,
         tier: Tier,
         disk: Option<&MountUsage>,
+        vram: Option<VramVitals>,
     ) -> Self {
         Self {
             tier: tier.as_str().to_string(),
@@ -76,6 +98,7 @@ impl Vitals {
                 used_pct: d.used_pct(),
                 inodes_used_pct: d.inodes_used_pct(),
             }),
+            vram,
         }
     }
 }

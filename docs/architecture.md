@@ -251,8 +251,14 @@ Base sample rate 1 Hz, escalating to 10 Hz above Amber.
 - `/sys/block/zram0/mm_stat` — live compression ratio and real RAM cost of swap.
 - Per-facet cgroup: `memory.current`, `memory.swap.current`, `memory.pressure`,
   `memory.events`.
-- NVML — VRAM per process, utilisation, temperature.
+- `nvidia-smi` — VRAM total and used, and per-process attribution. Not NVML,
+  though NVML is present and would sample in ~1 ms against `nvidia-smi`'s
+  measured 14 ms: at a 2 s GPU cadence the difference is invisible, and it is
+  not worth hand-rolled FFI against symbols that carry version suffixes and
+  change with the driver. Utilisation and temperature are not sampled — neither
+  is a pressure signal, and the governor acts on nothing it does not use.
 - Hyprland — `hyprctl layers -j` surface counts, `qs` process count and RSS.
+  *(Not implemented.)*
 
 ### 4.2 Governor
 
@@ -262,9 +268,9 @@ are per-facet overridable at runtime.
 | Tier | Trigger | Action |
 |---|---|---|
 | **Green** | — | Normal sampling. |
-| **Amber** | `full` stall > 5 % sustained 10 s, or headroom < 4 GiB | Escalate sampling, begin high-fidelity recording, compute attribution, notify. |
-| **Red** | `full` stall > 20 % sustained 15 s, or headroom < 1.5 GiB | Graceful intervention on the attributed facet — facet-defined hook (ComfyUI: unload models + free memory + drain queue; llama.cpp: unload). Notify. |
-| **Black** | `full` stall > 50 % sustained 10 s, or headroom < 500 MiB | `SIGTERM` the facet scope → 5 s grace → `cgroup.kill` (atomic, whole tree, no orphaned CUDA workers). Notify. |
+| **Amber** | `full` stall > 5 % sustained 10 s, headroom < 4 GiB, or any VRAM overdraft | Escalate sampling, begin high-fidelity recording, compute attribution, notify. |
+| **Red** | `full` stall > 20 % sustained 15 s, or headroom < 1.5 GiB, or VRAM overdraft > 2 GiB | Graceful intervention on the attributed facet — facet-defined hook (ComfyUI: unload models + free memory). Notify. |
+| **Black** | `full` stall > 50 % sustained 10 s, headroom < 500 MiB, or VRAM overdraft > 5 GiB | `SIGTERM` the facet scope → 5 s grace → `cgroup.kill` (atomic, whole tree, no orphaned CUDA workers). Notify. |
 | **Terminal** | prismd itself cannot be scheduled | Hardware watchdog goes unpetted; board resets. (Opt-in, §4.4.) |
 
 **Attribution.** The target is the facet with the highest
@@ -275,6 +281,110 @@ sitting at 500 MB is not the problem, and killing it would be user-hostile.
 **Flap protection.** Every action has a cooldown. Three interventions on the
 same facet inside 10 minutes stops automatic action and escalates to a
 notification instead — an intervention loop is worse than the original fault.
+
+#### 4.2a VRAM, which does not work like the others
+
+Every other resource here is fungible: a free byte of RAM is free for whoever
+asks next. VRAM is not, and governing it by free memory produces a daemon that
+fires constantly while nothing is wrong.
+
+The case that proves it is the voice stack on this host: a recogniser, a
+language model and a synthesiser, resident together at 11.8 GiB of a 12.29 GiB
+card. By the naive metric that is a permanent Black. It is in fact the system
+working — the models are resident *because* resident is the only way the latency
+budget closes — and shedding them to restore "headroom" would destroy the thing
+being protected in order to protect it.
+
+So the governed quantity is **foreign demand**, not free memory:
+
+| | |
+|---|---|
+| `ours` | VRAM held by processes inside a `prism-` cgroup. Reclaimable, so it is not pressure. |
+| `foreign` | the card's own `memory.used` **less** `ours`. |
+| `budget` | `total − foreign − reserve`. What a governed workload may hold. |
+| `overdraft` | `ours − budget`, floored at zero. What it must give back. |
+
+Three consequences worth stating, because each inverts the usual reading:
+
+**Our own use never raises the tier.** A card holding nothing but Prism's models
+sits at Green, because every byte of it can be given back the moment something
+asks.
+
+**Foreign use is measured as the remainder, not as a sum.** Measured at idle on
+this host: `memory.used` reports 1149 MiB while the per-process query itemises
+182 — a compositor, a stream host, a tray icon. The missing 967 MiB is scanout
+buffers and driver context: real, occupied, and unavailable to anyone. Summing
+processes would undercount the desktop's true use by five times and hand a
+workload a budget the card cannot honour.
+
+**The reserve is the whole mechanism.** By the time a game has failed to
+allocate, shedding is too late — the allocation already errored. So a governed
+workload is kept below what it could hold, always, by `vram_reserve_mib`
+(default 1 GiB).
+
+Unlike every other threshold, the overdraft floors count *up*: Amber at any
+overdraft, Red at 2 GiB, Black at 5 GiB — sized to what a shed step can actually
+recover on the measured stack (recogniser ~1.25 GiB, synthesiser ~3.9 GiB,
+language model ~2.7 GiB plus its KV cache).
+
+Attribution is by cgroup, never by process name: two `python3` processes, one a
+facet and one the operator's own notebook, differ in exactly the way that
+matters.
+
+There is **no cgroup controller for VRAM**, so unlike `memory.max` none of this
+is enforceable. Prism states the deficit; the workload chooses the concession.
+That is what `[graceful]` is for.
+
+#### 4.2b The spill — where VRAM pressure becomes a memory incident
+
+The four signals above are combined as a maximum, which assumes they are
+independent. For VRAM and memory that assumption is wrong, and the way it is
+wrong is the failure mode this whole daemon was written for.
+
+**VRAM pressure does not stay on the card.** ComfyUI answers a shortage by
+moving weights into host memory — its default policy, not a fallback. So a
+crowded card does not stay crowded: it resolves itself by putting several
+gigabytes onto the axis the thrash spiral runs along (§1.1). Worse, the transfer
+*relieves* the card, so afterwards the VRAM reading looks healthy and the memory
+event arrives with no explanation. Attribution then blames the offloading facet
+for RAM it was pushed into using.
+
+Every one of the four signals reads Green right up until the transfer, and Black
+immediately after. There is no moment at which they warn.
+
+So there is a fifth: **spill liability** — the RAM that would be demanded if
+every offload-capable facet moved its VRAM to host memory right now.
+
+```
+spill_liability = Σ vram(facet)  for facets declaring offloads_to_ram
+headroom_after_spill = honest_headroom − spill_liability
+```
+
+Three deliberate constraints:
+
+**It is declared, not detected.** A workload that offloads and one that fails an
+allocation look identical from outside until the spill has already happened, and
+the entire value of the signal is knowing beforehand. `offloads_to_ram = true`
+goes on the facet. False is the safe default: it under-reports a liability
+rather than inventing one.
+
+**A facet that cannot spill owes nothing.** llama.cpp with every layer on the
+card fails rather than migrating, so a resident model stack creates no liability
+however much of the card it holds. Counting it would produce a permanent phantom
+debt — the same misreading §4.2a exists to avoid.
+
+**Red and Black only.** This asks *would we survive the thing that is about to
+happen*, not *is something wrong now*. A machine that would merely be at Amber
+after a spill is a machine that is fine, and warning constantly about a
+survivable hypothetical is how a signal becomes furniture.
+
+`Driver::Spill` is named over a coincident Disk or Headroom reading, because it
+is the one that explains the others.
+
+Measured on this host: 30 GiB RAM, zram at 15.4 GiB, and a card whose largest
+offload-capable tenant is ComfyUI. With ~5 GiB of honest headroom and ComfyUI
+holding 4.5 GiB of VRAM, every existing signal reads Green and the machine is
+one queued workflow away from Black.
 
 ### 4.3 Supervisor and facets
 
@@ -287,27 +397,64 @@ Templates ship for llama.cpp, ComfyUI, Ollama, vLLM.
 id   = "comfyui"
 name = "ComfyUI"
 
-command = "/home/raahats/ComfyUI-Easy-Install/ComfyUI-Easy-Install/run.sh"
+command = ["/home/raahats/ComfyUI-Easy-Install/ComfyUI-Easy-Install/run.sh"]
 cwd     = "/home/raahats/ComfyUI-Easy-Install/ComfyUI-Easy-Install"
-
-[health]
-http        = "http://127.0.0.1:8188/system_stats"
-ready_after = "60s"
 
 [limits]                  # generous defaults; live-adjustable from the UI
 memory_high = "22G"       # soft throttle point
 memory_max  = "26G"       # hard backstop, leaves headroom for the session
 swap_max    = "6G"        # the surgical lever — caps zram, not RAM
-vram_soft   = "10G"
+vram_soft   = "10G"       # advisory only: there is no cgroup controller for VRAM
 
-[graceful]                # attempted before SIGTERM at Red
+[graceful]                # fired on every tier change, before any constraint
 http_post = { url = "http://127.0.0.1:8188/free",
               body = '{"unload_models":true,"free_memory":true}' }
 timeout   = "10s"
 
 [expose]
-port    = 8188
-tailnet = true            # reverse-proxied at /facet/comfyui/
+port  = 8188              # reverse-proxied at /facet/comfyui/
+title = "ComfyUI"
+```
+
+> **Install the binary before editing the config, never the other way round.**
+> A profile using a field the running prismd does not know fails to parse, and
+> `deny_unknown_fields` makes that a startup failure rather than a warning —
+> the daemon crash-loops until `Restart=` gives up, and the machine is left
+> without the thing that protects it. Observed on 2026-09-11 adding
+> `offloads_to_ram`: systemd's retry recovered it, which is luck rather than
+> design.
+>
+> There is no `[health]` block and no `tailnet` key, though earlier drafts of
+> this document showed both, and `command` is a list rather than a string.
+> `Facet` carries `#[serde(deny_unknown_fields)]`, so a config copied out of a
+> stale example does not get ignored — it fails to parse, and prismd
+> crash-loops. The block above is asserted verbatim by
+> `config::documented::the_documented_facet_block_parses`, which is the only way
+> a documented example stays true.
+
+**The graceful hook.** Everything else Prism can do to a facet is violent:
+`memory.max` truncates an allocation, `SIGTERM` ends the process, `cgroup.kill`
+ends all of them at once. Those are the right instruments for a runaway and the
+wrong ones for a workload that is behaving correctly, is holding something
+somebody else now needs, and could give part of it back if anyone asked.
+
+One POST, to an endpoint the workload already has, with the pressure figures
+substituted into the body. Prism does not interpret the reply beyond "it
+answered" — because Prism knows how much has to go and has no idea what any
+given workload can afford to lose. ComfyUI already knows `/free` means its
+checkpoints; a voice stack knows which of its three models it can survive
+without. **Prism states the deficit; the workload chooses the concession.**
+
+Placeholders available in `body`: `{facet}`, `{tier}`, `{vram_overdraft_mib}`,
+`{vram_budget_mib}`, `{headroom_mib}`. A figure that is not being sensed renders
+as `null` rather than `0` — zero would read as "you owe nothing", which is a
+claim, where absent GPU sensing means Prism does not know.
+
+```toml
+[graceful]                # a workload that can resize rather than only unload
+http_post = { url  = "http://127.0.0.1:8770/yield",
+              body = '{"tier":"{tier}","give_back_mib":{vram_overdraft_mib},"keep_mib":{vram_budget_mib}}' }
+timeout   = "10s"
 ```
 
 Launched via `systemd-run --user --scope` into `prism-<id>.scope`, which gives

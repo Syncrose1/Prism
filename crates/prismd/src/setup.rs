@@ -15,6 +15,7 @@
 //! Offering to launch something that is not installed is worse than offering
 //! nothing.
 
+use prism_core::graceful_config::{Graceful, HttpPost};
 use prism_core::config::{
     BindMode, Expose, Facet, FacetLimits, FileRoot, FilesConfig, GovernorConfig, HostConfig,
     Profile, ServerConfig, TerminalConfig,
@@ -110,6 +111,7 @@ fn detect_facets() -> Vec<Facet> {
                     // uses nearly the whole machine and a RAM ceiling would
                     // truncate legitimate work.
                     swap_max: Some("6G".into()),
+                    ..Default::default()
                 },
                 enabled_if: Default::default(),
                 // ComfyUI's own interface, served as a Prism window.
@@ -120,6 +122,24 @@ fn detect_facets() -> Vec<Facet> {
                     direct: false,
                 }),
                 pty: interactive,
+                // ComfyUI's default policy is to keep weights on the host and
+                // stream them to the card, offloading more as VRAM tightens.
+                // So crowding it does not free memory — it converts VRAM into
+                // RAM, which is the axis the thrash spiral runs along.
+                offloads_to_ram: true,
+                // ComfyUI is the one workload here that can already be asked.
+                // `/free` unloads checkpoints and releases the allocator's
+                // cache without ending the process, so a queued job survives
+                // the shed and resumes by reloading — seconds, against the
+                // minutes a restart costs.
+                graceful: Some(Graceful {
+                    http_post: HttpPost {
+                        url: "http://127.0.0.1:8188/free".into(),
+                        body: r#"{"unload_models":true,"free_memory":true}"#.into(),
+                        content_type: None,
+                    },
+                    timeout: "10s".into(),
+                }),
             });
             break;
         }
@@ -141,10 +161,22 @@ fn detect_facets() -> Vec<Facet> {
                     memory_high: None,
                     memory_max: None,
                     swap_max: Some("4G".into()),
+                    ..Default::default()
                 },
                 enabled_if: Default::default(),
                 expose: None,
                 pty: false,
+                // With `-ngl 99` every layer is on the card and llama.cpp fails
+                // the allocation rather than moving anything back. A partial
+                // offload is a launch-time choice, not a response to pressure,
+                // so there is nothing here that can spill under load.
+                offloads_to_ram: false,
+                // llama.cpp holds its weights for the life of the process and
+                // has no endpoint that gives them back. Left unset rather than
+                // pointed at something that would 404: a hook that always
+                // fails is worse than none, because it makes the log say the
+                // facet refused when it was never asked anything it could do.
+                graceful: None,
             });
             break;
         }
@@ -160,6 +192,7 @@ fn detect_facets() -> Vec<Facet> {
                 memory_high: None,
                 memory_max: None,
                 swap_max: Some("4G".into()),
+                ..Default::default()
             },
             enabled_if: prism_core::Gate {
                 binary: Some("ollama".into()),
@@ -167,6 +200,14 @@ fn detect_facets() -> Vec<Facet> {
             },
             expose: None,
             pty: false,
+            // Ollama splits a model between GPU and CPU when it does not fit,
+            // but it decides that at load time and does not migrate a running
+            // model back to RAM under pressure.
+            offloads_to_ram: false,
+            // `ollama stop` unloads a model, but it is a CLI verb rather than
+            // an endpoint on the serving port, and the hook posts HTTP. Ollama
+            // also unloads on its own idle timer, which covers the common case.
+            graceful: None,
         });
     }
 
