@@ -103,6 +103,7 @@ fn detect_facets() -> Vec<Facet> {
                     vec!["python".into(), script.display().to_string()]
                 },
                 cwd: Some(dir),
+                env: Vec::new(),
                 limits: FacetLimits {
                     memory_high: None,
                     memory_max: None,
@@ -157,6 +158,7 @@ fn detect_facets() -> Vec<Facet> {
                 name: "llama.cpp".into(),
                 command: vec![candidate.display().to_string(), "--host".into(), "127.0.0.1".into()],
                 cwd: None,
+                env: Vec::new(),
                 limits: FacetLimits {
                     memory_high: None,
                     memory_max: None,
@@ -188,6 +190,7 @@ fn detect_facets() -> Vec<Facet> {
             name: "Ollama".into(),
             command: vec!["ollama".into(), "serve".into()],
             cwd: None,
+            env: Vec::new(),
             limits: FacetLimits {
                 memory_high: None,
                 memory_max: None,

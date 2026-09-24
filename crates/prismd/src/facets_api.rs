@@ -214,6 +214,8 @@ struct CreateRequest {
     cwd: Option<String>,
     #[serde(default)]
     pty: bool,
+    #[serde(default)]
+    env: Option<Vec<(String, String)>>,
     /// A port this workload serves its own web interface on.
     #[serde(default)]
     expose: Option<u16>,
@@ -321,6 +323,7 @@ async fn create(
         name,
         command,
         cwd: body.cwd.filter(|c| !c.trim().is_empty()).map(std::path::PathBuf::from),
+        env: body.env.unwrap_or_default(),
         limits: FacetLimits {
             memory_high: body.limits.memory_high,
             memory_max: body.limits.memory_max,
@@ -636,6 +639,7 @@ mod tests {
             name: "Test".into(),
             command: vec!["sleep".into(), "60".into()],
             cwd: None,
+            env: Vec::new(),
             limits: FacetLimits::default(),
             enabled_if: Gate::default(),
             expose: None,

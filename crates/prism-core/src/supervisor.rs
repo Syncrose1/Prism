@@ -97,6 +97,10 @@ pub fn launch_argv(facet: &Facet) -> Vec<String> {
         argv.push(format!("--working-directory={}", cwd.display()));
     }
 
+    for (key, value) in &facet.env {
+        argv.push(format!("--setenv={key}={value}"));
+    }
+
     for property in limit_properties(&facet.limits) {
         argv.push(format!("--property={property}"));
     }
@@ -294,6 +298,7 @@ mod tests {
             name: "ComfyUI".into(),
             command: vec!["/opt/comfy/run.sh".into(), "--listen".into()],
             cwd: Some(PathBuf::from("/opt/comfy")),
+            env: vec![("STARGAZER_HOME".into(), "/home/me/polaris".into())],
             limits: FacetLimits::default(),
             enabled_if: Gate::default(),
             expose: None,
@@ -344,6 +349,9 @@ mod tests {
         assert!(argv.contains(&"--unit=prism-comfyui.service".to_string()));
         assert!(argv.contains(&"--property=MemoryAccounting=yes".to_string()));
         assert!(argv.contains(&"--working-directory=/opt/comfy".to_string()));
+        // The facet's environment reaches the workload, before its command.
+        let at = argv.iter().position(|a| a == "--setenv=STARGAZER_HOME=/home/me/polaris").expect("env passed");
+        assert!(at < argv.iter().position(|a| a == "--").unwrap());
     }
 
     #[test]

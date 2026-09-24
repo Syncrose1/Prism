@@ -249,6 +249,13 @@ pub struct Facet {
     pub command: Vec<String>,
     #[serde(default)]
     pub cwd: Option<PathBuf>,
+    /// Environment the facet is started with. A workload that must find a
+    /// socket or a home it cannot discover from its own conventions gets it
+    /// here, explicitly — the alternative is every workload scraping the
+    /// environment it hopes its launcher had, which systemd guarantees it
+    /// will not.
+    #[serde(default)]
+    pub env: Vec<(String, String)>,
     #[serde(default)]
     pub limits: FacetLimits,
     #[serde(default)]
