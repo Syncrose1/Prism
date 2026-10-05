@@ -85,23 +85,31 @@ impl Default for ServerConfig {
     fn default() -> Self {
         Self {
             port: DEFAULT_PORT,
-            bind: BindMode::Tailscale,
+            bind: BindMode::Overlay,
         }
     }
 }
 
 /// Where the API listens.
 ///
-/// [`BindMode::Tailscale`] is the default and resolves the host's tailnet
-/// address at startup. Binding the tailnet interface rather than `0.0.0.0` means
-/// the service is not reachable from the local network or the internet even if
-/// authentication were misconfigured — the network boundary and the auth
-/// boundary fail independently.
+/// [`BindMode::Overlay`] is the default: the private overlay network joining
+/// the operator's devices, whichever it is (Tailscale, Headscale, NetBird,
+/// ZeroTier, Nebula, WireGuard: `platform::overlay`). Binding the overlay
+/// rather than `0.0.0.0` means the service is not reachable from the local
+/// network or the internet even if authentication were misconfigured — the
+/// network boundary and the auth boundary fail independently. Loopback is
+/// always bound too, for programs on this machine (POLARIS's bridge).
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum BindMode {
+    /// Whichever overlay is up. `"tailscale"`, the name this had when it
+    /// knew only one, still reads as this.
     #[default]
-    Tailscale,
+    #[serde(alias = "tailscale")]
+    Overlay,
+    /// One named interface (`zt5u4…`, `wg0`), for an overlay Prism doesn't
+    /// recognise by itself.
+    Interface(String),
     Localhost,
     /// An explicit address. Prism warns loudly if this is a wildcard.
     Address(String),
@@ -404,9 +412,13 @@ mod tests {
     }
 
     #[test]
-    fn default_bind_is_tailnet_not_wildcard() {
+    fn default_bind_is_the_overlay_not_wildcard_and_the_old_name_still_reads() {
         let cfg = ServerConfig::default();
-        assert_eq!(cfg.bind, BindMode::Tailscale);
+        assert_eq!(cfg.bind, BindMode::Overlay);
+        let old: ServerConfig = toml::from_str("port = 9000\nbind = \"tailscale\"").unwrap();
+        assert_eq!(old.bind, BindMode::Overlay);
+        let named: ServerConfig = toml::from_str("port = 9000\nbind = { interface = \"zt0\" }").unwrap();
+        assert_eq!(named.bind, BindMode::Interface("zt0".into()));
         assert!(!cfg.bind.is_wildcard());
     }
 

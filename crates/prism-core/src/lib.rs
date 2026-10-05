@@ -13,6 +13,7 @@ pub mod gate;
 pub mod graceful;
 pub mod graceful_config;
 pub mod governor;
+pub mod intervene;
 pub mod platform;
 pub mod safety;
 pub mod sensors;

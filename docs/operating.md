@@ -10,11 +10,12 @@ when the operator is elsewhere. This is the whole surface.
     systemctl --user is-active prismd       # just "active" or not
     ss -ltnp | grep prismd                  # WHICH ADDRESS it is serving on
 
-That third one matters more than it looks. The bind is decided once, at
-startup. If `prismd` starts before `tailscaled` has an address, it falls back to
-`127.0.0.1` and serves only this machine — while still reporting itself
-perfectly healthy. If the address shown is `127.0.0.1`, Prism is up and you
-cannot reach it from anywhere else.
+That third one shows the overlay address *and* `127.0.0.1` (loopback is always
+served, for POLARIS on this machine). If only `127.0.0.1` shows, no overlay is
+up yet: Prism keeps looking every 5 s and starts listening there the moment
+one is (since 5 Oct 2026; before that the bind was decided once at startup and
+needed a restart, which the old `ExecStartPre` wait on `tailscale ip` papered
+over — it is no longer needed, and ties the unit to one vendor).
 
 ## Start, stop, restart
 
@@ -38,8 +39,8 @@ the browser is concerned.
 
 ## Reaching it
 
-    http://<tailscale-ip>:9000/          the shell
-    http://<tailscale-ip>:9000/rescue    the zero-JavaScript rescue page
+    http://<overlay-ip>:9000/          the shell
+    http://<overlay-ip>:9000/rescue    the zero-JavaScript rescue page
 
 `tailscale ip -4` gives the address. The rescue page is served unconditionally
 at every tier, shares no code with the shell, and renders in a text browser over

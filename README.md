@@ -86,7 +86,7 @@ Principles that earned their place the hard way:
 
 ## Security
 
-Bound to the Tailscale interface, never a wildcard, so the network boundary and
+Bound to the private overlay (Tailscale, Headscale, NetBird, ZeroTier, Nebula, WireGuard) and loopback, never a wildcard, so the network boundary and
 the auth boundary fail independently.
 
 Authentication is two factors without a timer: an authenticator code enrols a

@@ -242,7 +242,9 @@ does not die with the terminal. Prism reproduces this exactly via
 
 ### 4.1 Sensors
 
-Base sample rate 1 Hz, escalating to 10 Hz above Amber.
+Base sample rate 1 Hz, escalating to 4 Hz above Green (memory and PSI only; the
+GPU keeps its 2 s clock, the process table 1 s, facets' cgroups 1 Hz above
+Green and every 5 s at Green so growth is known before pressure arrives).
 
 - `/proc/pressure/memory` — `full` and `some`; the **`total` counter delta** is
   used rather than `avg10`, since avg10 has a ~10 s lag that matters when the
@@ -277,6 +279,15 @@ are per-facet overridable at runtime.
 `memory.current + memory.swap.current`, weighted by growth rate over the
 preceding window. Non-facet processes are never touched by default — a browser
 sitting at 500 MB is not the problem, and killing it would be user-hostile.
+
+**As built** (`prism_core::intervene`, 5 Oct 2026): Red calls the attributed
+facet's hook; Black stops it (SIGTERM, 5 s, `cgroup.kill`) only if Prism
+launched it, and otherwise only asks. Memory pressure is attributed by
+`memory.current + memory.swap.current` plus twice its growth per minute over
+30 s; VRAM pressure by the card held, a spill by the largest offloader. A full
+disk is said, never acted on (stopping a workload frees no bytes). Every action
+is judged 15 s later by what it restored (the facet gone; headroom or the
+card's debt better), and the verdict goes into the timeline beside the action.
 
 **Flap protection.** Every action has a cooldown. Three interventions on the
 same facet inside 10 minutes stops automatic action and escalates to a
@@ -516,6 +527,12 @@ end-to-end, or a reboot loop is possible.
 
 ### 4.5 Recorder
 
+*As built so far (5 Oct 2026):* the timeline is durable — every event is
+appended to `$STATE/timeline.jsonl` from a writer thread the monitor never
+waits on, warnings and actions synced at once, rotated at 1 MiB with one
+previous file kept, and read back on start. Still to come: system scope, the
+high-fidelity bursts, and the kernel-level attribution below.
+
 A continuously-appended, periodically-fsync'd ring buffer: ~10 minutes at 1 Hz,
 plus high-fidelity bursts during Amber and above. Survives hard reset. Renders
 in the UI as a timeline: *here is the 90 seconds before your machine died.*
@@ -551,9 +568,15 @@ this section and should be superseded by it, not merely wrapped.
 
 ### 4.6 API and access
 
-Bound to the Tailscale interface only. Preferred exposure is `tailscale serve`,
-which provides TLS and identity via the `Tailscale-User-Login` header; fallback
-is binding the tailnet IP with a bearer token.
+Bound to the **private overlay** — whichever one joins the operator's devices:
+Tailscale, a self-hosted Headscale, NetBird, ZeroTier, Nebula or plain WireGuard
+(`prism_core::platform::overlay`, by interface name or the 100.64/10 range; a
+named interface for anything else). Never one vendor's CLI: swapping the
+overlay changes nothing. Loopback is always bound too, for programs on this
+machine (POLARIS's bridge). An overlay not up at start is awaited and listened
+on the moment it is, so a boot race no longer leaves Prism serving only itself.
+A config file that doesn't parse runs on its last good copy instead of
+crash-looping.
 
 - REST for actions and configuration
 - WebSocket for the 1 Hz metrics stream

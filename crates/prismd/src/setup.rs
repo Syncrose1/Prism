@@ -225,18 +225,10 @@ fn which(name: &str) -> Option<PathBuf> {
     })
 }
 
-/// Bind to the tailnet when Tailscale is up, otherwise loopback.
-///
-/// Never a wildcard: an install that silently published itself to the local
-/// network would be a poor default however convenient.
-fn detect_bind() -> BindMode {
-    let up = std::process::Command::new("tailscale")
-        .args(["ip", "-4"])
-        .output()
-        .map(|o| o.status.success() && !o.stdout.is_empty())
-        .unwrap_or(false);
-    if up { BindMode::Tailscale } else { BindMode::Localhost }
-}
+/// The overlay, always: it is awaited if none is up yet, and this machine is
+/// served meanwhile. Never a wildcard: an install that silently published
+/// itself to the local network would be a poor default however convenient.
+fn detect_bind() -> BindMode { BindMode::Overlay }
 
 pub struct Detected {
     pub host: HostConfig,
@@ -294,8 +286,12 @@ pub fn command(config_dir: &Path) -> anyhow::Result<()> {
     println!("Detected on this machine");
     println!();
     println!("  bind        {}", match &d.host.server.bind {
-        BindMode::Tailscale => "tailnet (Tailscale is up)".to_string(),
-        BindMode::Localhost => "localhost (Tailscale not detected)".to_string(),
+        BindMode::Overlay => match prism_core::platform::overlay::find(None).first() {
+            Some(o) => format!("the overlay: {} on {} ({}), and this machine", o.address, o.interface, o.kind),
+            None => "this machine, and the overlay once one is up (none yet)".to_string(),
+        },
+        BindMode::Interface(i) => format!("{i}, and this machine"),
+        BindMode::Localhost => "this machine only".to_string(),
         BindMode::Address(a) => a.clone(),
     });
 

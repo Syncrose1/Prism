@@ -13,7 +13,8 @@
 use crate::action;
 use crate::api::{SharedVitals, Vitals, VramVitals};
 use prism_core::config::Profile;
-use prism_core::governor::{Governor, Reading};
+use prism_core::governor::{Governor, Reading, Tier};
+use prism_core::intervene::{FacetUse, Interventions, Pending, Step, Verdict};
 use prism_core::graceful::{self, Deficit};
 use prism_core::sensors::{disk, gpu, memory, process};
 use prism_core::supervisor::{FacetStatus, Supervisor};
@@ -23,6 +24,17 @@ use std::time::{Duration, Instant};
 use tracing::{error, info, warn};
 
 const TICK: Duration = Duration::from_secs(1);
+/// Above Green the loop samples four times as often (`architecture.md`
+/// §4.1: the spiral is exponential, and a second is a long time inside it).
+/// Only memory and PSI speed up: the GPU, the process table and the facets'
+/// cgroups keep their own clocks below.
+const TICK_FAST: Duration = Duration::from_millis(250);
+const STORM_EVERY: Duration = Duration::from_secs(1);
+/// Facets' memory is read this often at Green (so growth is already known
+/// when pressure arrives), and every tick above it.
+const FACETS_EVERY: Duration = Duration::from_secs(5);
+/// A Black stop's grace between SIGTERM and `cgroup.kill`.
+const STOP_GRACE: Duration = Duration::from_secs(5);
 
 /// Sample the GPU every other tick.
 ///
@@ -37,7 +49,7 @@ const TICK: Duration = Duration::from_secs(1);
 /// 20 invocations in 20 seconds costing 0.40 core-seconds, or **2% of one
 /// core** — about 20 ms per call once fork overhead is counted, against the
 /// 14 ms the binary takes on its own.
-const GPU_EVERY: u64 = 2;
+const GPU_EVERY: Duration = Duration::from_secs(2);
 const TERM_GRACE: Duration = Duration::from_secs(3);
 
 pub struct Monitor {
@@ -51,7 +63,15 @@ pub struct Monitor {
     vram_reserve_mib: u64,
     /// Last GPU sample, held between the ticks that do not take one.
     gpu: Option<gpu::GpuSnapshot>,
-    ticks: u64,
+    gpu_at: Option<Instant>,
+    storms_at: Option<Instant>,
+    facets_at: Option<Instant>,
+    /// Each running facet's cgroup, resolved once (asking systemd is a
+    /// process spawn; reading the directory is not).
+    cgroups: HashMap<String, std::path::PathBuf>,
+    uses: Vec<FacetUse>,
+    hands: Interventions,
+    pending: Option<Pending>,
     /// The live facet list, shared with the API so that a hook edited in the
     /// browser takes effect at the next transition rather than at the next
     /// restart of the daemon.
@@ -102,7 +122,13 @@ impl Monitor {
             disk_paths,
             vram_reserve_mib,
             gpu: None,
-            ticks: 0,
+            gpu_at: None,
+            storms_at: None,
+            facets_at: None,
+            cgroups: HashMap::new(),
+            uses: Vec::new(),
+            hands: Interventions::new(),
+            pending: None,
             facets,
             terminals,
             events,
@@ -112,7 +138,7 @@ impl Monitor {
     pub fn run(&mut self) -> anyhow::Result<()> {
         let mut next = Instant::now();
         loop {
-            next += TICK;
+            next += if self.governor.tier() > Tier::Green { TICK_FAST } else { TICK };
             self.tick();
             let now = Instant::now();
             if next > now {
@@ -127,7 +153,10 @@ impl Monitor {
     }
 
     fn tick(&mut self) {
-        if self.ticks % GPU_EVERY == 0 {
+        let now = Instant::now();
+        let due = |at: Option<Instant>, every: Duration| at.is_none_or(|t| now.duration_since(t) >= every);
+        if due(self.gpu_at, GPU_EVERY) {
+            self.gpu_at = Some(now);
             // `None` on a host with no NVIDIA driver, and on every later tick
             // too — so the absent case costs one failed spawn every two
             // seconds and nothing else. Deliberately not cached as "known
@@ -136,7 +165,10 @@ impl Monitor {
             // contractor is installing things while it runs.
             self.gpu = gpu::sample();
         }
-        self.ticks = self.ticks.wrapping_add(1);
+        if self.governor.tier() > Tier::Green || due(self.facets_at, FACETS_EVERY) {
+            self.facets_at = Some(now);
+            self.sense_facets(now);
+        }
 
         let spill_liability_mib = self.spill_liability();
         let vram = self.gpu.as_ref().map(|g| VramVitals {
@@ -187,6 +219,7 @@ impl Monitor {
                     // luxury a failing machine cannot afford.
                     crate::term_api::apply_tier(&self.terminals, tier);
                     self.terminals.reap();
+                    if tier < Tier::Red { self.pending = None; }
 
                     self.events.push_detailed(
                         match tier {
@@ -240,12 +273,94 @@ impl Monitor {
                         "pressure tier changed"
                     );
                 }
+                self.act(now, &reading);
             }
             Err(e) => error!(error = %e, "memory sample failed"),
         }
 
-        for verdict in self.detect_storms() {
-            self.respond(verdict);
+        if due(self.storms_at, STORM_EVERY) {
+            self.storms_at = Some(now);
+            for verdict in self.detect_storms() {
+                self.respond(verdict);
+            }
+        }
+    }
+
+    /// Every configured facet's memory and VRAM, for attribution. A facet
+    /// whose cgroup exists is running under Prism (`ours`); one that isn't
+    /// running holds nothing Prism can see.
+    fn sense_facets(&mut self, now: Instant) {
+        let facets = match self.facets.read() { Ok(f) => f.clone(), Err(_) => return };
+        let supervisor = Supervisor::new();
+        let read = |dir: &std::path::Path, f: &str| std::fs::read_to_string(dir.join(f)).ok().and_then(|s| s.trim().parse::<u64>().ok()).unwrap_or(0);
+        self.cgroups.retain(|id, dir| dir.is_dir() && facets.iter().any(|f| &f.id == id));
+        let mut uses = Vec::with_capacity(facets.len());
+        for f in &facets {
+            if !self.cgroups.contains_key(&f.id) {
+                if let Some(dir) = supervisor.cgroup_dir(&f.id) { self.cgroups.insert(f.id.clone(), dir); }
+            }
+            let dir = self.cgroups.get(&f.id);
+            uses.push(FacetUse {
+                id: f.id.clone(),
+                ours: dir.is_some(),
+                hook: f.graceful.is_some(),
+                memory_mib: dir.map(|d| (read(d, "memory.current") + read(d, "memory.swap.current")).div_ceil(1 << 20)).unwrap_or(0),
+                vram_mib: self.gpu.as_ref().map(|g| g.facet_mib(&f.id)).unwrap_or(0),
+                offloads: f.offloads_to_ram,
+            });
+        }
+        self.hands.sense(&uses, now);
+        self.uses = uses;
+    }
+
+    /// At Red and Black: judge the last action, then take the next one
+    /// (prism_core::intervene holds the rules). Each is recorded as Prism's
+    /// own hand in the timeline, and so is its verdict.
+    fn act(&mut self, now: Instant, reading: &Reading) {
+        use prism_core::events::Level;
+        let overdraft = reading.vram_overdraft_mib.unwrap_or(0);
+        if let Some(p) = &self.pending {
+            let id = match &p.step { Step::Ask(id) | Step::Stop(id) => id.clone(), Step::Say(_) => String::new() };
+            let running = self.uses.iter().any(|u| u.id == id && u.ours);
+            match p.judge(now, running, reading.headroom_mib, overdraft) {
+                Verdict::Wait => return,
+                Verdict::Relieved(how) => { if !how.is_empty() { self.events.push_detailed(Level::Info, "governor", format!("verified: `{id}` relieved the pressure"), Some(how)); } }
+                Verdict::Failed(why) => { warn!(%why, "intervention did not relieve pressure"); self.events.push(Level::Warn, "governor", why); }
+            }
+            self.pending = None;
+        }
+        let tier = self.governor.tier();
+        let driver = self.governor.driver();
+        let Some(step) = self.hands.decide(tier, driver, &self.uses, now) else { return };
+        let detail = format!("{} · {:?} · {:.1} GiB honest headroom", tier.as_str(), driver, reading.headroom_mib as f64 / 1024.0);
+        match &step {
+            Step::Say(what) => { warn!(%what, "governor"); self.events.push_detailed(Level::Warn, "governor", what.clone(), Some(detail)); }
+            Step::Ask(id) => {
+                let hook = self.facets.read().ok().and_then(|f| f.iter().find(|f| &f.id == id).and_then(|f| f.graceful.clone()));
+                if let Some(hook) = hook {
+                    graceful::spawn(id.clone(), hook, Deficit { facet: id.clone(), tier, vram_overdraft_mib: reading.vram_overdraft_mib, vram_budget_mib: None, headroom_mib: reading.headroom_mib });
+                    self.events.push_detailed(Level::Action, "governor", format!("asked `{id}` to yield"), Some(detail));
+                }
+            }
+            Step::Stop(id) => {
+                let id = id.clone();
+                // Off the monitor's thread: the grace must not stall sensing.
+                let events = std::sync::Arc::clone(&self.events);
+                std::thread::spawn(move || {
+                    let s = Supervisor::new();
+                    let r = s.terminate(&id).and_then(|_| {
+                        let until = Instant::now() + STOP_GRACE;
+                        while Instant::now() < until && s.cgroup_dir(&id).is_some() { std::thread::sleep(Duration::from_millis(200)); }
+                        if s.cgroup_dir(&id).is_some() { s.kill(&id) } else { Ok(()) }
+                    });
+                    if let Err(e) = r { events.push_detailed(prism_core::events::Level::Error, "governor", format!("couldn't stop `{id}`"), Some(e.to_string())); }
+                });
+                error!(facet = %step_id(&step), "stopping facet at black");
+                self.events.push_detailed(Level::Action, "governor", format!("stopped `{}`", step_id(&step)), Some(detail));
+            }
+        }
+        if !matches!(step, Step::Say(_)) {
+            self.pending = Some(Pending { step, at: now, driver, headroom_mib: reading.headroom_mib, vram_overdraft_mib: overdraft });
         }
     }
 
@@ -396,3 +511,5 @@ impl Monitor {
         }
     }
 }
+
+fn step_id(s: &Step) -> &str { match s { Step::Ask(id) | Step::Stop(id) => id, Step::Say(_) => "" } }

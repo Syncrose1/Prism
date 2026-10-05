@@ -114,12 +114,8 @@ fn split_authority(base: &str) -> std::io::Result<(String, u16)> {
 /// The address Prism actually advertises, so the URL that gets opened is the
 /// same one that works from a phone a minute later.
 fn advertised_base(port: u16) -> Option<String> {
-    let out = std::process::Command::new("tailscale")
-        .args(["ip", "-4"])
-        .output()
-        .ok()?;
-    let addr = String::from_utf8_lossy(&out.stdout).lines().next()?.trim().to_string();
-    (!addr.is_empty()).then(|| format!("http://{addr}:{port}"))
+    let o = prism_core::platform::overlay::find(None).into_iter().find(|o| o.address.is_ipv4())?;
+    Some(format!("http://{}:{port}", o.address))
 }
 
 fn open_browser(url: &str) -> std::io::Result<()> {

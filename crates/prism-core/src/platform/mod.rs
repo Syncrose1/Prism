@@ -26,6 +26,8 @@
 //! memory pressure, and that limitation belongs in the design rather than being
 //! discovered later.
 
+pub mod overlay;
+
 use crate::config::FacetLimits;
 
 /// Starting, stopping and constraining a workload.

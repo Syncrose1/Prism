@@ -179,6 +179,16 @@ impl Supervisor {
             .map_err(|e| anyhow::anyhow!("cgroup.kill for `{facet_id}`: {e}"))
     }
 
+    /// Send SIGTERM to every process in the facet's unit, without waiting:
+    /// the governor's Black step, which gives a grace and then [Self::kill]s
+    /// what remains. Through systemd, so it can't reach beyond the unit.
+    pub fn terminate(&self, facet_id: &str) -> anyhow::Result<()> {
+        let Some(unit) = self.active_unit(facet_id) else {
+            anyhow::bail!("facet `{facet_id}` is not running");
+        };
+        run_systemctl(&["kill", "--signal=SIGTERM", &unit])
+    }
+
     /// Ask a facet to stop politely, letting it run its own shutdown.
     pub fn stop(&self, facet_id: &str) -> anyhow::Result<()> {
         // Whichever unit is carrying it: stopping the service name while the
@@ -245,6 +255,11 @@ impl Supervisor {
         let path = self.cgroup_path(facet_id).ok()??;
         let raw = std::fs::read_to_string(path.join("memory.swap.current")).ok()?;
         raw.trim().parse::<u64>().ok().map(|b| b / 1024)
+    }
+
+    /// The facet's cgroup directory while it runs under Prism, else `None`.
+    pub fn cgroup_dir(&self, facet_id: &str) -> Option<std::path::PathBuf> {
+        self.cgroup_path(facet_id).ok().flatten()
     }
 
     /// Resolve a facet's cgroup directory by asking systemd, rather than

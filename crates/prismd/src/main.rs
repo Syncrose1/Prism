@@ -85,10 +85,14 @@ fn main() -> anyhow::Result<()> {
         Ok(false) => {}
         Err(e) => warn!(error = %e, "could not write initial configuration"),
     }
-    let host: HostConfig =
-        config::load_or_default(&dir.join("prism.toml")).context("loading host config")?;
-    let profile: Profile =
-        config::load_or_default(&dir.join("profile.toml")).context("loading profile")?;
+    let (host, host_refused): (HostConfig, _) = load_kept(&dir.join("prism.toml"));
+    // A profile that doesn't parse (an edit with a typo, a key a newer
+    // version reads and this one doesn't) must not take the daemon down:
+    // under systemd that is a crash loop on the machine it exists to keep
+    // reachable, often with the operator away. The last profile that loaded
+    // is kept beside it and used instead, and the refusal is the timeline's
+    // first event.
+    let (profile, refused): (Profile, _) = load_kept(&dir.join("profile.toml"));
 
     info!(
         profile = %profile.name,
@@ -131,13 +135,18 @@ fn main() -> anyhow::Result<()> {
     let vitals: api::SharedVitals = Arc::new(RwLock::new(api::Vitals::default()));
     let facets = Arc::new(RwLock::new(profile.facet.clone()));
     let profile_path = Arc::new(dir.join("profile.toml"));
-    let events = Arc::new(prism_core::events::EventLog::new());
+    let events = Arc::new(prism_core::events::EventLog::durable(&state_dir.join("timeline.jsonl")));
     let nvenc = media::have_nvenc();
     info!(nvenc, "media transcoding");
     let proxy_client = proxy::client();
     let proxy_tls_client = proxy::tls_client();
     let tls_backends = Arc::new(RwLock::new(std::collections::HashSet::new()));
     events.push(prism_core::events::Level::Info, "prism", "daemon started");
+    for (file, why) in [("prism.toml", host_refused), ("profile.toml", refused)] {
+        if let Some(why) = why {
+            events.push_detailed(prism_core::events::Level::Error, "prism", format!("{file} didn't load: running on the last good one"), Some(why));
+        }
+    }
     let state_dir_arc = Arc::new(state_dir.clone());
     let terminals = Arc::new(prism_core::term::session::SessionManager::new(
         term_api::manager_from(&host.terminal),
@@ -223,12 +232,9 @@ async fn serve(
     tls_backends: Arc<RwLock<std::collections::HashSet<String>>>,
     nvenc: bool,
 ) -> anyhow::Result<()> {
-    let addr = bind::resolve(&host.server.bind, host.server.port)?;
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .with_context(|| format!("binding {addr}"))?;
-
-    info!(%addr, "prism os listening at http://{addr}/");
+    let plan = bind::resolve(&host.server.bind, host.server.port)?;
+    let port = host.server.port;
+    let overlay_events = Arc::clone(&events);
     // The console key exists from the first start, so `prismd open` never has a
     // first-run case of its own to explain.
     let console_key = std::sync::Arc::new(
@@ -255,15 +261,79 @@ async fn serve(
         nvenc,
     });
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-        .context("serving api")
+    // Every address in the plan. Loopback failing (something else holds the
+    // port there) costs only the bridge, so it is warned about; any other
+    // address failing is fatal, as it always was.
+    let mut tasks = tokio::task::JoinSet::new();
+    for addr in plan.now {
+        match tokio::net::TcpListener::bind(addr).await {
+            Ok(l) => {
+                info!(%addr, "prism os listening at http://{addr}/");
+                tasks.spawn(serve_on(l, app.clone()));
+            }
+            Err(e) if addr.ip().is_loopback() => warn!(%addr, error = %e, "couldn't listen on loopback"),
+            Err(e) => return Err(e).with_context(|| format!("binding {addr}")),
+        }
+    }
+    // The overlay wasn't up at start: listen there the moment it is.
+    if let Some(mode) = plan.awaiting {
+        let app = app.clone();
+        tasks.spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                let addrs = bind::overlay_addrs(&mode, port);
+                if addrs.is_empty() { continue }
+                let mut inner = tokio::task::JoinSet::new();
+                for addr in addrs {
+                    match tokio::net::TcpListener::bind(addr).await {
+                        Ok(l) => {
+                            info!(%addr, "the overlay is up: prism os listening at http://{addr}/");
+                            overlay_events.push(prism_core::events::Level::Info, "prism", format!("the overlay came up: listening on {addr}"));
+                            inner.spawn(serve_on(l, app.clone()));
+                        }
+                        Err(e) => warn!(%addr, error = %e, "couldn't listen on the overlay"),
+                    }
+                }
+                if inner.is_empty() { continue }
+                while inner.join_next().await.is_some() {}
+                return Ok(());
+            }
+        });
+    }
+    tokio::select! {
+        _ = shutdown_signal() => Ok(()),
+        r = tasks.join_next() => match r {
+            Some(Ok(r)) => r,
+            Some(Err(e)) => Err(anyhow::anyhow!("listener task: {e}")),
+            None => Ok(()),
+        },
+    }
+}
+
+async fn serve_on(listener: tokio::net::TcpListener, app: axum::Router) -> anyhow::Result<()> {
+    axum::serve(listener, app).await.context("serving api")
 }
 
 async fn shutdown_signal() {
     let _ = tokio::signal::ctrl_c().await;
     info!("shutdown requested");
+}
+
+/// A config file, or the last copy of it that loaded and why this one didn't.
+fn load_kept<T: serde::de::DeserializeOwned + Default>(path: &std::path::Path) -> (T, Option<String>) {
+    let good = path.with_extension("toml.last-good");
+    match config::load_or_default::<T>(path) {
+        Ok(p) => {
+            if path.is_file() { let _ = std::fs::copy(path, &good); }
+            (p, None)
+        }
+        Err(e) => {
+            let why = format!("{e:#}");
+            warn!(error = %why, file = %path.display(), "config refused; using the last good copy");
+            let fallback = config::load_or_default::<T>(&good).unwrap_or_default();
+            (fallback, Some(why))
+        }
+    }
 }
 
 /// Pin the daemon's pages so it cannot be swapped out.

@@ -36,8 +36,13 @@ pub const DEFAULT_PROTECTED: &[&str] = &[
     "init",
     // Remote access. The whole point of the exercise.
     "sshd",
+    // Every overlay a reachable machine might be on, not one vendor's.
     "tailscaled",
     "tailscale",
+    "headscale",
+    "zerotier-one",
+    "netbird",
+    "nebula",
     // Display stack. Losing this severs Sunshine/Moonlight and any GUI path.
     "Hyprland",
     "sway",
