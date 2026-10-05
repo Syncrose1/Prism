@@ -5,6 +5,8 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+toml.workspace = true
+subtle = "2"
 prism-core = { path = "../prism-core" }
 anyhow.workspace = true
 regex.workspace = true

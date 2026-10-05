@@ -113,6 +113,16 @@ pub struct AppState {
     /// `prism_core::auth::console`.
     pub console_key: Arc<String>,
     pub grants: Arc<prism_core::auth::console::Grants>,
+    /// **The bridge** (POLARIS on this machine): a 0600 key in the state
+    /// directory, sent as `Authorization: Bridge <key>`, from loopback only.
+    /// Reading it proves what reading `totp.secret` would (the owning user on
+    /// this host), so it authorises like a session; every change made with it
+    /// is in the access log under `polaris`, for the account named in
+    /// `X-Prism-For`.
+    pub bridge_key: Arc<String>,
+    /// Who signed in, from where, and what they changed: sealed
+    /// (`prism_core::access`).
+    pub access: Arc<prism_core::access::AccessLog>,
     /// The port Prism itself is serving on, so the discovery sweep does not
     /// offer the operator their own desktop as an app to add to it.
     pub port: u16,
@@ -134,7 +144,10 @@ pub struct AppState {
 }
 
 pub fn router(state: AppState) -> Router {
+    let audited = state.clone();
     Router::new()
+        .route("/api/access", get(access))
+        .route("/api/config/{name}", get(config_get).put(config_put))
         .route("/api/health", get(health))
         .route("/api/auth/login", post(login))
         .route("/api/auth/console", post(console_grant))
@@ -154,6 +167,7 @@ pub fn router(state: AppState) -> Router {
         .merge(crate::proxy::routes())
         .route("/", get(crate::ui::index))
         .route("/ui/{*path}", get(crate::ui::asset))
+        .layer(axum::middleware::from_fn_with_state(audited, audit))
         .with_state(state)
 }
 
@@ -198,8 +212,23 @@ fn device_cookie(token: &str, ttl: u64) -> String {
     format!("{DEVICE_COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={ttl}")
 }
 
+/// The bridge key a request carries, if any.
+pub(crate) fn bridge_token(headers: &HeaderMap) -> Option<String> {
+    headers.get("authorization")?.to_str().ok()?.strip_prefix("Bridge ").map(|k| k.trim().to_string())
+}
+
+/// Whether a request carries the right bridge key (compared in constant time).
+pub(crate) fn is_bridge(state: &AppState, headers: &HeaderMap) -> bool {
+    use subtle::ConstantTimeEq;
+    match bridge_token(headers) {
+        Some(k) if !state.bridge_key.is_empty() => k.as_bytes().ct_eq(state.bridge_key.as_bytes()).into(),
+        _ => false,
+    }
+}
+
 /// Enforce a tier, returning the error response to send if it is not met.
 pub(crate) fn require(state: &AppState, headers: &HeaderMap, need: Sensitivity) -> Option<Response> {
+    if is_bridge(state, headers) { return None }
     let now = totp::now_unix();
     match state.auth.authorize(session_token(headers).as_deref(), need, now) {
         AuthOutcome::Granted => None,
@@ -569,4 +598,113 @@ mod tests {
             assert!(json.contains(field), "missing field {field}");
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// The access log, and the bridge's audit
+// ---------------------------------------------------------------------------
+
+/// Every sign-in, refusal and change, written to the sealed access log on
+/// its way out, with the peer it came from. One layer rather than a line in
+/// each handler, so a new route that changes something is logged without
+/// anyone remembering to. The bridge key is refused from anywhere but
+/// loopback: the key is this machine's, and never needs to cross a network.
+async fn audit(
+    State(state): State<AppState>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    use prism_core::access::{Access, Kind};
+    let method = req.method().clone();
+    let path = req.uri().path().to_string();
+    let headers = req.headers().clone();
+    let bridged = bridge_token(&headers).is_some();
+    let for_account = headers.get("x-prism-for").and_then(|v| v.to_str().ok()).map(|v| v.chars().filter(|c| c.is_alphanumeric() || "-_. ".contains(*c)).take(64).collect::<String>());
+    let from = peer.ip().to_string();
+    let log = |kind: Kind, who: &str, how: &str, what: String| {
+        let a = Access { who: who.into(), for_account: for_account.clone(), how: how.into(), from: from.clone(), what };
+        if let Err(e) = state.access.append(kind, a, totp::now_unix()) { error!(error = %e, "access log write failed"); }
+    };
+    if bridged && !peer.ip().is_loopback() {
+        log(Kind::Refused, "unknown", "bridge", format!("{method} {path}: the bridge key, from off this machine"));
+        return err_json(StatusCode::FORBIDDEN, "bridge_is_local", "the bridge key is accepted from this machine only");
+    }
+    // A sign-in's body says how (a code or a password); it is small, so it
+    // is read here and handed on.
+    let (req, how) = if path == "/api/auth/login" {
+        let (parts, body) = req.into_parts();
+        let bytes = axum::body::to_bytes(body, 64 * 1024).await.unwrap_or_default();
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or_default();
+        let how = if v["code"].as_str().is_some_and(|c| !c.trim().is_empty()) { "code" } else { "password" };
+        (axum::extract::Request::from_parts(parts, axum::body::Body::from(bytes)), how)
+    } else { (req, "") };
+    let ok_bridge = bridged && is_bridge(&state, &headers);
+    let res = next.run(req).await;
+    let status = res.status();
+    let good = status.is_success() || status.is_redirection();
+    match (path.as_str(), &method) {
+        ("/api/auth/login", _) => log(if good { Kind::SignedIn } else { Kind::Refused }, if good { "admin" } else { "unknown" }, how, format!("sign-in: {}", status.as_u16())),
+        ("/auth/console", _) => log(if good { Kind::SignedIn } else { Kind::Refused }, if good { "admin" } else { "unknown" }, "console", "signed in from this machine".into()),
+        ("/api/auth/logout", _) => log(Kind::SignedOut, "admin", "session", "signed out".into()),
+        ("/api/auth/console", _) => {}
+        (p, m) if *m != axum::http::Method::GET && *m != axum::http::Method::HEAD && p.starts_with("/api/") => {
+            let who = if ok_bridge { "polaris" } else { "admin" };
+            let how = if ok_bridge { "bridge" } else { "session" };
+            if good { log(Kind::Changed, who, how, format!("{method} {path}")) }
+            else if status == StatusCode::UNAUTHORIZED { log(Kind::Refused, "unknown", if bridged { "bridge" } else { "session" }, format!("{method} {path}")) }
+        }
+        _ if bridged && !ok_bridge && status == StatusCode::UNAUTHORIZED => log(Kind::Refused, "unknown", "bridge", format!("{method} {path}: a wrong bridge key")),
+        _ => {}
+    }
+    res
+}
+
+#[derive(Deserialize)]
+struct AccessQuery {
+    who: Option<String>,
+    limit: Option<usize>,
+}
+
+/// The access log, newest first, with whether its chain is intact.
+async fn access(State(state): State<AppState>, headers: HeaderMap, Query(q): Query<AccessQuery>) -> Response {
+    if let Some(r) = require(&state, &headers, Sensitivity::Session) { return r }
+    let entries = state.access.recent(q.limit.unwrap_or(200).min(2000), q.who.as_deref());
+    Json(serde_json::json!({ "verified": state.access.verify(), "entries": entries })).into_response()
+}
+
+/// The two config files POLARIS (or the operator) may read and change.
+fn config_path(state: &AppState, name: &str) -> Option<std::path::PathBuf> {
+    let dir = state.profile_path.parent()?.to_path_buf();
+    match name { "prism" => Some(dir.join("prism.toml")), "profile" => Some((*state.profile_path).clone()), _ => None }
+}
+
+async fn config_get(State(state): State<AppState>, headers: HeaderMap, axum::extract::Path(name): axum::extract::Path<String>) -> Response {
+    if let Some(r) = require(&state, &headers, Sensitivity::Session) { return r }
+    let Some(path) = config_path(&state, &name) else { return err_json(StatusCode::NOT_FOUND, "no_such_config", "prism or profile") };
+    let text = std::fs::read_to_string(&path).unwrap_or_default();
+    ([(axum::http::header::CONTENT_TYPE, "text/plain; charset=utf-8")], text).into_response()
+}
+
+/// Replace a config file, only if it parses as what it is: a file Prism
+/// would refuse never reaches the disk. The one it replaces becomes the last
+/// good copy. Facets apply at once; the governor and the server read theirs
+/// at the next start.
+async fn config_put(State(state): State<AppState>, headers: HeaderMap, axum::extract::Path(name): axum::extract::Path<String>, body: String) -> Response {
+    if let Some(r) = require(&state, &headers, Sensitivity::Session) { return r }
+    let Some(path) = config_path(&state, &name) else { return err_json(StatusCode::NOT_FOUND, "no_such_config", "prism or profile") };
+    let parsed: Result<Option<Vec<Facet>>, String> = match name.as_str() {
+        "prism" => toml::from_str::<prism_core::config::HostConfig>(&body).map(|_| None).map_err(|e| e.to_string()),
+        _ => toml::from_str::<prism_core::config::Profile>(&body).map(|p| Some(p.facet)).map_err(|e| e.to_string()),
+    };
+    let facets = match parsed { Ok(f) => f, Err(e) => return err_json(StatusCode::UNPROCESSABLE_ENTITY, "does_not_parse", e) };
+    let good = path.with_extension("toml.last-good");
+    if path.is_file() { let _ = std::fs::copy(&path, &good); }
+    let tmp = path.with_extension("toml.new");
+    if let Err(e) = std::fs::write(&tmp, &body).and_then(|_| std::fs::rename(&tmp, &path)) {
+        return err_json(StatusCode::INTERNAL_SERVER_ERROR, "write_failed", e.to_string());
+    }
+    if let Some(f) = facets && let Ok(mut live) = state.facets.write() { *live = f; }
+    state.events.push(prism_core::events::Level::Action, "prism", format!("{name}.toml changed"));
+    Json(serde_json::json!({ "ok": true, "applies": if name == "profile" { "facets now; the governor at the next start" } else { "at the next start" } })).into_response()
 }

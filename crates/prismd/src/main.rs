@@ -242,10 +242,25 @@ async fn serve(
             .unwrap_or_default(),
     );
 
+    let bridge_key = std::sync::Arc::new(
+        prism_core::auth::console::load_or_create_key(&state_dir.join("bridge.key"))
+            .unwrap_or_default(),
+    );
+    let access = std::sync::Arc::new(
+        prism_core::access::AccessLog::open(&state_dir.join("access.jsonl"))
+            .with_context(|| "opening the access log")?,
+    );
+    let sealed = access.verify();
+    if let Some(line) = sealed.broken_at {
+        warn!(line, "the access log's chain is broken: an entry was changed or removed");
+        events.push_detailed(prism_core::events::Level::Error, "prism", "the access log has been tampered with", Some(format!("its chain breaks at line {line}")));
+    }
     let app = api::router(api::AppState {
         port: host.server.port,
         auth,
         console_key,
+        bridge_key,
+        access,
         grants: std::sync::Arc::new(prism_core::auth::console::Grants::new()),
         vitals,
         facets,
@@ -311,7 +326,9 @@ async fn serve(
 }
 
 async fn serve_on(listener: tokio::net::TcpListener, app: axum::Router) -> anyhow::Result<()> {
-    axum::serve(listener, app).await.context("serving api")
+    // With the peer's address: the access log says where each sign-in came
+    // from, and the bridge is refused off loopback.
+    axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>()).await.context("serving api")
 }
 
 async fn shutdown_signal() {

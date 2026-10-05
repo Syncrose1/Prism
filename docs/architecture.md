@@ -578,6 +578,17 @@ on the moment it is, so a boot race no longer leaves Prism serving only itself.
 A config file that doesn't parse runs on its last good copy instead of
 crash-looping.
 
+**The bridge and the access log** (5 Oct 2026). POLARIS on this machine
+reads and changes Prism with `Authorization: Bridge <key>`, the key being a
+0600 file at `$STATE/bridge.key`: reading it proves what reading
+`totp.secret` would, so it authorises like a session. Accepted from loopback
+only, and refused (and logged) from anywhere else. `X-Prism-For` names the
+POLARIS account it acts for. `GET/PUT /api/config/{prism|profile}`: a file
+that doesn't parse never reaches the disk; the replaced one becomes the last
+good copy; facets apply at once. Every sign-in, refusal and change, with its
+peer, goes to `$STATE/access.jsonl`, a SHA-256 chain checked at start and
+served by `GET /api/access?who=`.
+
 - REST for actions and configuration
 - WebSocket for the 1 Hz metrics stream
 - SSE per-facet log streaming
