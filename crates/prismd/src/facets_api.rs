@@ -568,7 +568,12 @@ async fn stop(State(state): State<AppState>, Path(id): Path<String>, headers: He
     if find(&state, &id).is_none() {
         return err(StatusCode::NOT_FOUND, "no_facet", "no such facet");
     }
-    match Supervisor::new().stop(&id) {
+    // Off the async threads: `systemctl stop` waits for the facet's own
+    // shutdown, and with it on a worker PRISM stopped answering anything else
+    // meanwhile (a facet asking PRISM, as it stopped, to stop another hung
+    // until systemd killed it).
+    let stopping = id.clone();
+    match tokio::task::spawn_blocking(move || Supervisor::new().stop(&stopping)).await.unwrap_or_else(|e| Err(anyhow::anyhow!(e.to_string()))) {
         Ok(()) => {
             info!(facet = %id, "facet stopped");
             StatusCode::NO_CONTENT.into_response()
@@ -585,7 +590,8 @@ async fn kill(State(state): State<AppState>, Path(id): Path<String>, headers: He
     if find(&state, &id).is_none() {
         return err(StatusCode::NOT_FOUND, "no_facet", "no such facet");
     }
-    match Supervisor::new().kill(&id) {
+    let killing = id.clone();
+    match tokio::task::spawn_blocking(move || Supervisor::new().kill(&killing)).await.unwrap_or_else(|e| Err(anyhow::anyhow!(e.to_string()))) {
         Ok(()) => {
             info!(facet = %id, "facet killed via cgroup.kill");
             StatusCode::NO_CONTENT.into_response()
