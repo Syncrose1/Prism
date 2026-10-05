@@ -51,6 +51,7 @@ const ICONS = {
   pip: '<rect x="3" y="5" width="18" height="14" rx="2"/><rect x="12" y="11" width="7" height="6" rx="1"/>',
   chat: '<path d="M4 6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H10l-5 4v-4H6a2 2 0 0 1-2-2z"/>',
   send: '<path d="M4 12l16-8-6 16-2-6z"/>',
+  check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
 };
 const svg = (n, c = '#fff', w = 2.6) => `<svg viewBox="0 0 24 24" fill="none" stroke="${c}" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[n]}</svg>`;
 
@@ -93,7 +94,32 @@ const sky = $('#sky'), sg = sky.getContext('2d');
 // soft stars need neither more, and the PC (often a remote one, on a
 // laptop's battery) gets the rest. It stops when hidden behind windows.
 const dpr = () => 1;
-const stars = Array.from({ length: 34 }, () => ({ x: Math.random(), y: Math.random(), r: 2 + Math.random() * 5, s: .000004 + Math.random() * .00001, tw: Math.random() * 6.28 }));
+// The sky as POLARIS draws it (shell Field.kt): a tile wider than any
+// screen, stars scattered from a fixed seed (the same sky everywhere), and
+// near neighbours sometimes joined into constellations: at most three lines
+// at a star, each stopping short of both ends. It all drifts as one, so the
+// shapes hold.
+const SKY_W = 2700, SKY_H = 1000;
+const { stars, joins } = (() => {
+  let seed = 0x5eed; const rnd = () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+  const st = [];
+  for (let n = 0; st.length < 70 && n < 3000; n++) {
+    const c = { x: rnd() * SKY_W, y: 30 + rnd() * (SKY_H - 60), r: 2 + rnd() * 4.5, tw: rnd() * 6.28 };
+    if (st.every(o => Math.hypot(o.x - c.x, o.y - c.y) > (o.r + c.r) * 9)) st.push(c);
+  }
+  const jn = [], deg = st.map(() => 0);
+  st.forEach((a, i) => {
+    if (rnd() > .62) return;
+    const want = rnd() < .55 ? 1 : 2; let made = 0;
+    const near = st.map((b, j) => [j, Math.hypot(b.x - a.x, b.y - a.y)]).filter(([j, d]) => j !== i && d < 230).sort((p, q) => p[1] - q[1]);
+    for (const [j] of near) {
+      if (made >= want) break;
+      if (deg[i] >= 3 || deg[j] >= 3 || jn.some(([p, q]) => (p === i && q === j) || (p === j && q === i))) continue;
+      jn.push([i, j]); deg[i]++; deg[j]++; made++;
+    }
+  });
+  return { stars: st, joins: jn };
+})();
 let gather = 0, skyOn = true, skyColour = '#33BFE2', skyRaf = 0, skyLast = 0;
 function size(c) { c.width = innerWidth * dpr(); c.height = innerHeight * dpr(); c.getContext('2d').setTransform(dpr(), 0, 0, dpr(), 0, 0); }
 addEventListener('resize', () => { size(sky); size($('#veil')); });
@@ -109,8 +135,19 @@ function drawSky(t) {
   if (t - skyLast >= 32) {
     skyLast = t;
     sg.clearRect(0, 0, innerWidth, innerHeight);
+    const W = innerWidth, k = innerHeight / SKY_H, off = (t * .006) % SKY_W, g = Math.min(1, gather);
+    const xs = x => { const b = ((x - off) % SKY_W + SKY_W) % SKY_W; return b > W + 260 ? b - SKY_W : b; };
+    sg.strokeStyle = skyColour; sg.lineWidth = 1.5; sg.lineCap = 'round'; sg.globalAlpha = .2 * g;
+    sg.beginPath();
+    for (const [i, j] of joins) {
+      const a = stars[i], b = stars[j], ax = xs(a.x), bx = ax + (b.x - a.x);
+      if (Math.max(ax, bx) < -20 || Math.min(ax, bx) > W + 20) continue;
+      const ay = a.y * k, by = b.y * k, dx = bx - ax, dy = by - ay, len = Math.hypot(dx, dy), ga = (a.r + 6) / len, gb = (b.r + 6) / len;
+      sg.moveTo(ax + dx * ga, ay + dy * ga); sg.lineTo(bx - dx * gb, by - dy * gb);
+    }
+    sg.stroke();
     sg.fillStyle = skyColour;
-    for (const s of stars) { sg.globalAlpha = .45 * (.6 + .4 * Math.sin(t / 1400 + s.tw)) * Math.min(1, gather); starPath(sg, ((s.x + t * s.s) % 1) * innerWidth, s.y * innerHeight, s.r); sg.fill(); }
+    for (const s of stars) { const x = xs(s.x); if (x < -10 || x > W + 10) continue; sg.globalAlpha = .45 * (.6 + .4 * Math.sin(t / 1400 + s.tw)) * g; starPath(sg, x, s.y * k, s.r); sg.fill(); }
     sg.globalAlpha = 1;
   }
   if (!reduce) skyRaf = requestAnimationFrame(drawSky);
@@ -119,17 +156,34 @@ const wakeSky = () => { if (!skyRaf) skyRaf = requestAnimationFrame(drawSky); };
 document.addEventListener('visibilitychange', wakeSky);
 wakeSky();
 function tween(ms, f, done) { const t0 = performance.now(); (function s(n) { const k = Math.min(1, (n - t0) / (reduce ? 1 : ms)); f(k); k < 1 ? requestAnimationFrame(s) : done && done(); })(t0); }
-function chevronSweep(mid, done) {
-  const veil = $('#veil'), vg = veil.getContext('2d'), W = innerWidth, H = innerHeight;
+// The chevron is the transition itself: what's ahead of it (sign-in) is
+// wiped away as it passes, and what's behind it (Home, or the Apps left
+// open) is already there. Both scenes are drawn during the sweep, each
+// clipped to its side of the band; the stars carry on underneath.
+async function chevronSweep(mid, done) {
+  const veil = $('#veil'), vg = veil.getContext('2d'), si = $('#s-signin'), top = $('#top');
+  if (reduce) { await mid(); done && done(); return; }
+  si.classList.add('leaving'); document.body.classList.add('sweeping'); top.classList.add('hold');
+  await mid();
+  const W = innerWidth, H = innerHeight, A = H * .45, slope = A / (W * .6);
   const css = getComputedStyle(document.documentElement); const c1 = css.getPropertyValue('--veil-1').trim(), c2 = css.getPropertyValue('--veil-2').trim();
-  const e = x => 1 - Math.pow(1 - Math.max(0, Math.min(1, x)), 3);
-  const shape = (y, col) => { vg.fillStyle = col; vg.beginPath(); vg.moveTo(-W * .1, y + H * .45); vg.lineTo(W / 2, y); vg.lineTo(W * 1.1, y + H * .45); vg.lineTo(W * 1.1, y + H * 3); vg.lineTo(-W * .1, y + H * 3); vg.closePath(); vg.fill(); };
-  let midDone = false;
-  tween(1500, k => {
+  const to = $$('.scene.on').find(x => x !== si);
+  const e = x => x < .5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
+  const band = (y0, y1, col) => { vg.fillStyle = col; vg.beginPath(); vg.moveTo(-W * .1, y0 + A); vg.lineTo(W / 2, y0); vg.lineTo(W * 1.1, y0 + A); vg.lineTo(W * 1.1, y1 + A); vg.lineTo(W / 2, y1); vg.lineTo(-W * .1, y1 + A); vg.closePath(); vg.fill(); };
+  const edge = y => y + slope * W / 2;   // the chevron's height at the screen's edges
+  tween(1250, k => {
+    const e1 = H * (1.02 - 2.5 * e(k)), e2 = e1 + H * .12, e3 = e2 + H * .2;
     vg.clearRect(0, 0, W, H);
-    if (k < .62) { shape(H * (1.05 - 1.9 * e(k / .55)), c1); shape(H * (1.25 - 2.1 * e((k - .08) / .54)), c2); }
-    else { if (!midDone) { midDone = true; mid(); } vg.globalAlpha = 1 - e((k - .62) / .38); vg.fillStyle = c2; vg.fillRect(0, 0, W, H); vg.globalAlpha = 1; }
-  }, () => { vg.clearRect(0, 0, W, H); if (!midDone) mid(); done && done(); });
+    band(e1, e2 + 1, c1); band(e2, e3, c2);
+    si.style.clipPath = `polygon(0 0, ${W}px 0, ${W}px ${edge(e1) + 1}px, ${W / 2}px ${e1 + 1}px, 0 ${edge(e1) + 1}px)`;
+    if (to) to.style.clipPath = `polygon(0 ${edge(e3) - 1}px, ${W / 2}px ${e3 - 1}px, ${W}px ${edge(e3) - 1}px, ${W}px ${H}px, 0 ${H}px)`;
+    if (edge(e3) < 40) top.classList.remove('hold');
+  }, () => {
+    vg.clearRect(0, 0, W, H);
+    si.classList.remove('leaving'); si.style.clipPath = ''; if (to) to.style.clipPath = '';
+    document.body.classList.remove('sweeping'); top.classList.remove('hold');
+    done && done();
+  });
 }
 
 /* ── State, kept on the host ─────────────────────────────────────────── */
@@ -282,7 +336,7 @@ async function enter() {
 }
 $('#signout').addEventListener('click', async () => {
   try { await api.post('/api/auth/logout'); } catch (e) {}
-  signedIn = false; closeSheet('#menu'); playSignin();
+  signedIn = false; closeSheet('#menu'); if (solisSide) { solisSide.remove(); solisSide = null; } playSignin();
 });
 
 /* ── Top bar ─────────────────────────────────────────────────────────── */
@@ -290,8 +344,28 @@ setInterval(() => { $('#clock').textContent = new Date().toLocaleTimeString(unde
 $('#clock').textContent = new Date().toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
 $('#device').addEventListener('click', () => { if (allowed('vitals')) openApp('vitals'); });
 $('#me').addEventListener('click', () => toggleSheet('#menu'));
-$('#solisBtn').addEventListener('click', () => { if (state.scene === 'work' && state.panes.some(p => p.id === 'solis')) setFocus('solis'); else openApp('solis'); });
-document.addEventListener('keydown', e => { if (e.altKey && e.key.toLowerCase() === 's' && signedIn && allowed('solis')) { e.preventDefault(); $('#solisBtn').click(); } });
+// Solis beside everything, as POLARIS's Alt+Z: a column that slides in on
+// the right and keeps its conversation while it's away.
+let solisSide = null;
+function toggleSolis(on) {
+  if (!allowed('solis')) return;
+  if (!solisSide) {
+    solisSide = el(`<aside class="side" aria-label="Solis"><div class="sidehead">${svg('star')}<b>Solis</b><small>Alt+Z</small><button class="b" aria-label="Put Solis away">${svg('x', 'currentColor', 2.6)}</button></div><div class="sidebody"></div></aside>`);
+    const holder = solisSide.querySelector('.sidebody');
+    holder.appendChild(solisApp({}, holder));
+    solisSide.querySelector('.b').addEventListener('click', () => toggleSolis(false));
+    document.body.appendChild(solisSide);
+  }
+  on = on ?? !solisSide.classList.contains('on');
+  requestAnimationFrame(() => solisSide.classList.toggle('on', on));
+  $('#solisBtn').setAttribute('aria-pressed', String(on));
+  if (on) setTimeout(() => solisSide.querySelector('textarea')?.focus(), 260);
+}
+$('#solisBtn').addEventListener('click', () => toggleSolis());
+document.addEventListener('keydown', e => {
+  if (e.altKey && !e.ctrlKey && e.key.toLowerCase() === 'z' && signedIn) { e.preventDefault(); toggleSolis(); }
+  else if (e.key === 'Escape' && solisSide?.classList.contains('on') && solisSide.contains(document.activeElement)) { e.stopPropagation(); toggleSolis(false); }
+}, true);
 function toggleSheet(s) { const on = !$(s).classList.contains('on'); ['#open', '#menu'].forEach(x => closeSheet(x)); if (on) $(s).classList.add('on'); }
 function closeSheet(s) { $(s).classList.remove('on'); }
 document.addEventListener('pointerdown', e => { if (!e.target.closest('.sheet') && !e.target.closest('.strip .add') && !e.target.closest('#me')) { closeSheet('#open'); closeSheet('#menu'); } });
@@ -334,7 +408,7 @@ function goHome() { seq++; gather = 1; showScene('home'); topOn(true); renderHom
 async function renderHome() {
   $('#solisBtn').hidden = !allowed('solis');
   const h = $('#s-home');
-  const tiles = Object.entries(APPS).filter(([id]) => allowed(id)).map(([id, a], i) => `<button class="tile" data-open="${id}"><span class="m" style="--c:${a.c};--d:${(-i * 0.7) % 4.4}s">${svg(a.icon)}</span>${a.name}</button>`).join('');
+  const tiles = Object.entries(APPS).filter(([id]) => allowed(id)).map(([id, a], i) => `<button class="tile" data-open="${id}"><span class="m" style="--c:${a.c};--d:${(i * 0.35).toFixed(2)}s">${svg(a.icon)}</span>${a.name}</button>`).join('');
   h.innerHTML = `
     <div class="jump"><h3>Jump back in</h3><div class="posters" id="posters"><div class="poster" aria-hidden="true"><span class="art">${svg('photo', 'var(--shade)')}</span></div></div></div>
     <div class="tiles">${tiles}</div>
@@ -405,7 +479,7 @@ function renderHosted() {
   box.innerHTML = '';
   exposed.forEach((f, i) => {
     const pol = /face-stream/.test(f.command || ''), running = f.state === 'running' || f.state === 'foreign';
-    const b = el(`<button class="tile"><span class="m" style="--c:${pol ? '#7C5CE0' : running ? '#2E9E62' : '#9A978F'};--d:${-i * .9}s">${svg(pol ? 'play' : 'globe')}${pol ? `<span class="pstar">${svg('star')}</span>` : ''}</span>${esc(f.expose.title || f.name)}<small>${running ? (pol ? 'POLARIS, streamed' : 'running') : 'stopped'}</small></button>`);
+    const b = el(`<button class="tile" data-facet="${esc(f.id)}"><span class="m" style="--c:${pol ? '#7C5CE0' : running ? '#2E9E62' : '#9A978F'};--d:${(3 + i * 0.35).toFixed(2)}s">${svg(pol ? 'play' : 'globe')}${pol ? `<span class="pstar">${svg('star')}</span>` : ''}</span>${esc(f.expose.title || f.name)}<small>${running ? (pol ? 'POLARIS, streamed' : 'running') : 'stopped'}</small></button>`);
     b.addEventListener('click', () => openHosted(f.id));
     b.addEventListener('contextmenu', ev => { ev.preventDefault(); serviceMenu(f, ev.clientX, ev.clientY); });
     box.appendChild(b);
@@ -535,11 +609,9 @@ function gutters(rects) {
 }
 function drag(handle, move) {
   handle.addEventListener('pointerdown', e => {
-    e.preventDefault(); handle.setPointerCapture(e.pointerId); handle.classList.add('on'); $('#panes').classList.add('resizing');
+    e.preventDefault(); handle.classList.add('on'); $('#panes').classList.add('resizing');
     const sx = e.clientX, sy = e.clientY;
-    const mv = m => move(m.clientX - sx, m.clientY - sy);
-    const up = () => { handle.removeEventListener('pointermove', mv); handle.removeEventListener('pointerup', up); handle.classList.remove('on'); $('#panes').classList.remove('resizing'); persist(); };
-    handle.addEventListener('pointermove', mv); handle.addEventListener('pointerup', up);
+    track(m => move(m.clientX - sx, m.clientY - sy), () => { handle.classList.remove('on'); $('#panes').classList.remove('resizing'); persist(); });
   });
 }
 function glide(change) {
@@ -604,7 +676,7 @@ function makePane(p) {
   const head = e.querySelector('.phead');
   head.addEventListener('contextmenu', ev => { if (!ev.ctrlKey) { ev.preventDefault(); paneMenu(p, ev.clientX, ev.clientY); } });
   head.addEventListener('dblclick', ev => { if (state.wm === 'float' && !ev.target.closest('button')) glide(() => e.classList.toggle('max')); });
-  head.addEventListener('pointerdown', ev => { if (ev.button === 0 && !ev.target.closest('button')) pickUp(e, p, ev); });
+  head.addEventListener('pointerdown', ev => { if (ev.button === 0 && !ev.target.closest('button')) { ev.preventDefault(); pickUp(e, p, ev); } });
   // Ctrl+left anywhere on a pane picks it up; Ctrl+right resizes it.
   e.addEventListener('pointerdown', ev => {
     if (!ev.ctrlKey || matchMedia('(max-width:640px)').matches) return;
@@ -612,45 +684,57 @@ function makePane(p) {
     if (ev.button === 0) pickUp(e, p, ev);
     if (ev.button === 2) resizeBy(e, p, ev);
   }, true);
-  e.addEventListener('contextmenu', ev => { if (ev.ctrlKey) ev.preventDefault(); }, true);
+  // Ctrl+right is a resize, never a menu (and not just after one either).
+  e.addEventListener('contextmenu', ev => { if (ev.ctrlKey || dragging || performance.now() - lastGesture < 400) { ev.preventDefault(); ev.stopPropagation(); } }, true);
   const grip = e.querySelector('.grip');
   grip.addEventListener('pointerdown', ev => { ev.stopPropagation(); resizeBy(e, p, ev); });
   return e;
 }
-let dragging = false;
+let dragging = false, lastGesture = 0;
+// Follow the pointer anywhere on the page until it lets go. Window-level
+// listeners rather than pointer capture: capture was lost the moment the
+// pointer crossed an app's page (an iframe), which is why a drag stopped
+// after a pixel. Pages are shielded from the pointer while dragging.
+function track(move, up) {
+  dragging = true; document.body.classList.add('dragging');
+  const mv = m => { m.preventDefault(); move(m); };
+  const end = m => {
+    removeEventListener('pointermove', mv); removeEventListener('pointerup', end); removeEventListener('pointercancel', end);
+    dragging = false; lastGesture = performance.now(); document.body.classList.remove('dragging');
+    up && up(m);
+  };
+  addEventListener('pointermove', mv); addEventListener('pointerup', end); addEventListener('pointercancel', end);
+}
 function pickUp(e, p, ev) {
   if (matchMedia('(max-width:640px)').matches) return;
   const box = $('#panes'), sx = ev.clientX, sy = ev.clientY;
-  const cap = ev.target.setPointerCapture ? ev.target : e; try { cap.setPointerCapture(ev.pointerId); } catch (x) {}
-  dragging = true; e.classList.add('lifted');
   if (state.wm === 'float') {
-    if (e.classList.contains('max')) { dragging = false; e.classList.remove('lifted'); return; }
+    if (e.classList.contains('max')) return;
     const s = state.pos[p.id], l0 = s.l, t0 = s.t;
-    const mv = m => { s.l = Math.min(box.clientWidth - 120, Math.max(-s.w + 120, l0 + m.clientX - sx)); s.t = Math.min(box.clientHeight - 50, Math.max(0, t0 + m.clientY - sy)); e.style.left = s.l + 'px'; e.style.top = s.t + 'px'; };
-    const up = () => { cap.removeEventListener('pointermove', mv); cap.removeEventListener('pointerup', up); dragging = false; e.classList.remove('lifted'); persist(); };
-    cap.addEventListener('pointermove', mv); cap.addEventListener('pointerup', up);
+    let moved = false;
+    track(m => {
+      if (!moved && Math.hypot(m.clientX - sx, m.clientY - sy) < 3) return;
+      moved = true; e.classList.add('lifted');
+      s.l = Math.min(box.clientWidth - 120, Math.max(-s.w + 120, l0 + m.clientX - sx)); s.t = Math.min(box.clientHeight - 40, Math.max(0, t0 + m.clientY - sy));
+      e.style.left = s.l + 'px'; e.style.top = s.t + 'px';
+    }, () => { e.classList.remove('lifted'); if (moved) persist(); });
   } else {
-    let over = null; const r0 = e.getBoundingClientRect();
-    const mv = m => {
+    let over = null, moved = false;
+    track(m => {
+      if (!moved && Math.hypot(m.clientX - sx, m.clientY - sy) < 4) return;
+      moved = true; e.classList.add('lifted');
       e.style.transform = `translate(${m.clientX - sx}px,${m.clientY - sy}px) scale(.97)`;
-      e.style.pointerEvents = 'none';
-      const t = document.elementFromPoint(m.clientX, m.clientY)?.closest('.pane');
-      e.style.pointerEvents = '';
-      if (over && over !== t) over.classList.remove('drop'); over = t && t !== e ? t : null; over && over.classList.add('drop');
-    };
-    const up = () => {
-      cap.removeEventListener('pointermove', mv); cap.removeEventListener('pointerup', up); dragging = false; e.classList.remove('lifted');
-      e.style.transform = '';
+      const t = document.elementsFromPoint(m.clientX, m.clientY).map(x => x.closest('.pane')).find(x => x && x !== e) || null;
+      if (over !== t) { over && over.classList.remove('drop'); over = t; over && over.classList.add('drop'); }
+    }, () => {
+      e.classList.remove('lifted'); e.style.transform = '';
       if (over) { over.classList.remove('drop'); const ia = state.panes.findIndex(x => x.id === p.id), ib = state.panes.findIndex(x => x.id === over.dataset.app); glide(() => { [state.panes[ia], state.panes[ib]] = [state.panes[ib], state.panes[ia]]; place(); }); persist(); }
-      else if (!reduce) e.animate([{ transform: `translate(${0}px,0)` }], { duration: 1 });
-    };
-    cap.addEventListener('pointermove', mv); cap.addEventListener('pointerup', up);
+    });
   }
 }
 function resizeBy(e, p, ev) {
   if (matchMedia('(max-width:640px)').matches) return;
-  const box = $('#panes'), sx = ev.clientX, sy = ev.clientY; dragging = true; box.classList.add('resizing');
-  try { e.setPointerCapture(ev.pointerId); } catch (x) {}
+  const box = $('#panes'), sx = ev.clientX, sy = ev.clientY; box.classList.add('resizing');
   let mv;
   if (state.wm === 'float') {
     const s = state.pos[p.id], w0 = s.w, h0 = s.h;
@@ -666,8 +750,7 @@ function resizeBy(e, p, ev) {
       place();
     };
   }
-  const up = () => { e.removeEventListener('pointermove', mv); e.removeEventListener('pointerup', up); dragging = false; box.classList.remove('resizing'); persist(); };
-  e.addEventListener('pointermove', mv); e.addEventListener('pointerup', up);
+  track(mv, () => { box.classList.remove('resizing'); persist(); });
 }
 function closePane(id) {
   const e = paneEl(id); if (!e) return;
@@ -722,11 +805,16 @@ document.addEventListener('keydown', e => {
 /* ── Files ───────────────────────────────────────────────────────────── */
 const KIND_ICON = { dir: ['folder', '#E5A23A'], image: ['photo', '#2E71C8'], video: ['play', '#C0485C'], audio: ['music', '#7C5CE0'], text: ['doc', '#868B94'], pdf: ['doc', '#C0485C'], archive: ['box', '#9A978F'], other: ['doc', '#9A978F'] };
 function filesApp(args, body, pane) {
-  const root = el(`<div class="files"><aside class="places"></aside><div class="browse"><div class="fbar"><div class="crumbs"></div><label class="search">${svg('search', 'currentColor', 2.4)}<input type="search" placeholder="Search this folder" aria-label="Search this folder"></label></div><div class="grid" tabindex="0"></div></div></div>`);
-  let roots = [], cur = { root: args?.root, path: args?.path || '' }, entries = [], shown = [], sel = 0, typed = '', typedAt = 0, stay = 0;
-  const places = root.querySelector('.places'), crumbs = root.querySelector('.crumbs'), grid = root.querySelector('.grid'), search = root.querySelector('.search input');
+  const root = el(`<div class="files"><aside class="places"></aside><div class="browse"><div class="fbar"><div class="crumbs" title="Click the empty part to type a path"></div><label class="search">${svg('search', 'currentColor', 2.4)}<input type="search" placeholder="Search this folder" aria-label="Search this folder"></label></div><div class="chosenbar" hidden></div><div class="grid" tabindex="0"></div></div></div>`);
+  let roots = [], cur = { root: args?.root, path: args?.path || '' }, entries = [], shown = [], sel = 0, anchor = 0, typed = '', typedAt = 0, stay = 0;
+  const chosen = new Set();
+  const places = root.querySelector('.places'), crumbs = root.querySelector('.crumbs'), grid = root.querySelector('.grid'), search = root.querySelector('.search input'), bar = root.querySelector('.chosenbar');
   const writable = () => state.role !== 'guest' && roots.find(r => r.name === cur.root)?.writable;
   const fullOf = x => cur.path ? `${cur.path}/${x.name}` : x.name;
+  const things = () => grid.querySelectorAll('.thing');
+  const picked = () => shown.filter(x => chosen.has(x.name));
+  const zipUrl = (names, name) => `/api/files/zip?${q({ root: cur.root, dir: cur.path, names: JSON.stringify(names), name: name || '' })}`;
+  const save = href => { const a = document.createElement('a'); a.href = href; a.download = ''; document.body.appendChild(a); a.click(); a.remove(); };
   // The sidebar: only what the person pinned. Pin a folder from its menu.
   function drawPins() {
     places.innerHTML = '<div class="group">Pinned</div>';
@@ -734,16 +822,33 @@ function filesApp(args, body, pane) {
     for (const p of state.pins) {
       if (!roots.some(r => r.name === p.root)) continue;
       const b = el(`<button class="place" aria-pressed="${p.root === cur.root && p.path === cur.path}"><span class="tk" style="background:#E5A23A">${svg('folder')}</span><span>${esc(p.path ? p.path.split('/').pop() : p.root)}</span></button>`);
-      b.addEventListener('click', () => { cur = { ...p }; load(); });
-      b.addEventListener('contextmenu', ev => { ev.preventDefault(); menu(ev.clientX, ev.clientY, [{ label: 'Open', icon: 'folder', act: () => { cur = { ...p }; load(); } }, { label: 'Unpin', icon: 'x', act: () => pin(p.root, p.path, false) }]); });
+      b.addEventListener('click', () => go(p.root, p.path));
+      b.addEventListener('contextmenu', ev => { ev.preventDefault(); menu(ev.clientX, ev.clientY, [{ label: 'Open', icon: 'folder', act: () => go(p.root, p.path) }, { label: 'Unpin', icon: 'x', act: () => pin(p.root, p.path, false) }]); });
       places.appendChild(b);
     }
   }
   body.__pins = drawPins;
-  function select(i, scroll = true) {
-    sel = Math.max(0, Math.min(shown.length - 1, i));
-    grid.querySelectorAll('.thing').forEach((t, j) => t.classList.toggle('sel', j === sel));
-    if (scroll) grid.querySelectorAll('.thing')[sel]?.scrollIntoView({ block: 'nearest', behavior: reduce ? 'auto' : 'smooth' });
+  function go(r, path) { cur = { root: r, path }; load(); }
+  // Selection: a cursor (keys move it) and the set chosen (Ctrl, Shift, a box).
+  function paint() {
+    things().forEach((t, j) => { t.classList.toggle('sel', j === sel); t.classList.toggle('chosen', chosen.has(shown[j]?.name)); });
+    const n = chosen.size;
+    bar.hidden = n < 2;
+    if (n >= 2) {
+      bar.innerHTML = `<b>${n} chosen</b><button class="btn q dl">${svg('down', 'currentColor', 2.4)}Download as zip</button>${writable() ? `<button class="btn q del">${svg('trash', 'currentColor', 2.2)}Delete</button>` : ''}<button class="btn q clr">Clear</button>`;
+      bar.querySelector('.dl').addEventListener('click', () => save(zipUrl([...chosen])));
+      bar.querySelector('.del')?.addEventListener('click', () => removeAll(picked()));
+      bar.querySelector('.clr').addEventListener('click', () => { chosen.clear(); paint(); });
+    }
+  }
+  function select(i, scroll = true, how = 'only') {
+    if (!shown.length) return;
+    i = Math.max(0, Math.min(shown.length - 1, i));
+    if (how === 'only') { chosen.clear(); chosen.add(shown[i].name); anchor = i; }
+    else if (how === 'toggle') { chosen.has(shown[i].name) ? chosen.delete(shown[i].name) : chosen.add(shown[i].name); anchor = i; }
+    else if (how === 'range') { chosen.clear(); for (let k = Math.min(anchor, i); k <= Math.max(anchor, i); k++) chosen.add(shown[k].name); }
+    sel = i; paint();
+    if (scroll) things()[sel]?.scrollIntoView({ block: 'nearest', behavior: reduce ? 'auto' : 'smooth' });
   }
   function open(x) {
     const full = fullOf(x);
@@ -752,106 +857,227 @@ function filesApp(args, body, pane) {
     else if (x.kind === 'video' || x.kind === 'audio') openApp('videos', { root: cur.root, path: full, name: x.name });
     else window.open(`/api/files/raw?${q({ root: cur.root, path: full })}`, '_blank', 'noopener');
   }
+  async function removeAll(xs) {
+    if (!xs.length) return;
+    const ok = await ask(xs.length === 1 ? `Delete ${xs[0].name}? There's no undo.` : `Delete these ${xs.length}? There's no undo.`, null, 'Delete'); if (!ok) return;
+    let done = 0;
+    for (const x of xs) { try { await api.post('/api/files/delete', { root: cur.root, path: fullOf(x), recursive: x.is_dir }); done++; } catch (e) { toast(`${x.name}: ${e.message}`, true); } }
+    if (done) toast(done === 1 ? `${xs[0].name} deleted.` : `${done} deleted.`);
+    chosen.clear(); load(true);
+  }
   function itemMenu(x, ev) {
+    const many = chosen.size > 1 && chosen.has(x.name);
+    if (many) {
+      const xs = picked();
+      return menu(ev.clientX, ev.clientY, [
+        { label: `Download ${xs.length} as zip`, icon: 'down', act: () => save(zipUrl(xs.map(y => y.name))) },
+        { label: 'Copy their paths', icon: 'doc', act: () => navigator.clipboard?.writeText(xs.map(y => `${cur.root}/${fullOf(y)}`).join('\n')).then(() => toast('Paths copied.'), () => {}) },
+        writable() && 'sep',
+        writable() && { label: `Delete ${xs.length}`, icon: 'trash', danger: true, hint: 'Del', act: () => removeAll(xs) },
+      ]);
+    }
     const full = fullOf(x), w = writable();
     menu(ev.clientX, ev.clientY, [
       { label: 'Open', icon: x.is_dir ? 'folder' : (KIND_ICON[x.kind] || KIND_ICON.other)[0], act: () => open(x), hint: 'Enter' },
-      !x.is_dir && { label: 'Download', icon: 'down', act: () => { const a = document.createElement('a'); a.href = `/api/files/raw?${q({ root: cur.root, path: full, download: true })}`; a.download = x.name; a.click(); } },
-      x.is_dir && { label: pinned(cur.root, full) ? 'Unpin' : 'Pin to the sidebar', icon: 'pin', act: () => pin(cur.root, full, !pinned(cur.root, full)) },
+      !x.is_dir && { label: 'Download', icon: 'down', act: () => save(`/api/files/raw?${q({ root: cur.root, path: full, download: true })}`) },
+      x.is_dir && { label: 'Download as zip', icon: 'down', act: () => save(zipUrl([x.name])) },
+      x.is_dir && { label: pinned(cur.root, full) ? 'Unpin' : 'Pin to the sidebar', icon: 'pin', act: () => { pin(cur.root, full, !pinned(cur.root, full)); draw(); } },
       x.is_dir && state.role !== 'guest' && { label: 'Share a link…', icon: 'link', act: () => openShare(cur.root, full, !!w) },
-      { label: 'Copy its path', icon: 'doc', act: () => navigator.clipboard?.writeText(`${cur.root}/${full}`).then(() => toast('Path copied.'), () => {}) },
+      { label: 'Copy its path', icon: 'doc', act: () => navigator.clipboard?.writeText(`${rootPath(cur.root)}/${full}`).then(() => toast('Path copied.'), () => {}) },
       w && 'sep',
-      w && { label: 'Rename…', icon: 'pen', act: async () => { const n = await ask(`A new name for ${x.name}`, x.name); if (!n || n === x.name) return; try { await api.post('/api/files/rename', { root: cur.root, path: full, name: n }); load(); } catch (e) { toast(e.message, true); } } },
-      w && { label: 'Delete', icon: 'trash', danger: true, act: async () => { const ok = await ask(`Delete ${x.name}? There's no undo.`, null, 'Delete'); if (!ok) return; try { await api.post('/api/files/delete', { root: cur.root, path: full, recursive: x.is_dir }); toast(`${x.name} deleted.`); load(); } catch (e) { toast(e.message, true); } } },
+      w && { label: 'Rename…', icon: 'pen', hint: 'F2', act: () => rename(x) },
+      w && { label: 'Delete', icon: 'trash', danger: true, hint: 'Del', act: () => removeAll([x]) },
       'sep',
       { label: `${x.is_dir ? 'Folder' : bytes(x.size)}${x.modified ? ' · ' + new Date(x.modified * 1000).toLocaleString(undefined, { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''}`, disabled: true },
     ]);
   }
+  async function rename(x) { const n = await ask(`A new name for ${x.name}`, x.name); if (!n || n === x.name) return; try { await api.post('/api/files/rename', { root: cur.root, path: fullOf(x), name: n }); load(true); } catch (e) { toast(e.message, true); } }
   function draw() {
     const f = search.value.trim().toLowerCase();
     shown = f ? entries.filter(x => x.name.toLowerCase().includes(f)) : entries;
     grid.innerHTML = shown.length ? '' : `<div class="empty">${f ? `Nothing here matches “${esc(search.value)}”.` : writable() ? 'Empty. Drop files here to upload them.' : 'Empty.'}</div>`;
-    for (const x of shown.slice(0, 800)) {
+    for (const x of shown.slice(0, 2000)) {
       const [ic, c] = KIND_ICON[x.kind] || KIND_ICON.other;
       const full = fullOf(x), thumb = x.kind === 'image' || x.kind === 'video';
-      const b = el(`<button class="thing" tabindex="-1"><span class="th">${svg(ic, c, 2.2)}${thumb ? `<img loading="lazy" alt="" src="/api/files/thumb?${q({ root: cur.root, path: full })}" onerror="this.remove()">` : ''}${x.is_dir && pinned(cur.root, full) ? `<span class="pinmark">${svg('pin', '#fff', 2.4)}</span>` : ''}</span><b title="${esc(x.name)}">${esc(x.name)}</b><small>${x.is_dir ? 'Folder' : bytes(x.size)}${x.modified ? ' · ' + ago(x.modified) : ''}</small></button>`);
-      b.addEventListener('click', ev => { const i = shown.indexOf(x); if (sel === i || ev.detail > 1 || matchMedia('(hover:none)').matches) open(x); else select(i, false); });
-      b.addEventListener('dblclick', () => open(x));
-      b.addEventListener('contextmenu', ev => { ev.preventDefault(); select(shown.indexOf(x), false); itemMenu(x, ev); });
+      const b = el(`<button class="thing" tabindex="-1"><span class="th">${svg(ic, c, 2.2)}${thumb ? `<img loading="lazy" decoding="async" alt="" src="/api/files/thumb?${q({ root: cur.root, path: full })}" onerror="this.remove()" onload="this.classList.add('in')">` : ''}${x.is_dir && pinned(cur.root, full) ? `<span class="pinmark">${svg('pin', '#fff', 2.4)}</span>` : ''}<span class="tick">${svg('check', '#fff', 3)}</span></span><b title="${esc(x.name)}">${esc(x.name)}</b><small>${x.is_dir ? 'Folder' : bytes(x.size)}${x.modified ? ' · ' + ago(x.modified) : ''}</small></button>`);
+      b.addEventListener('click', ev => {
+        const i = shown.indexOf(x);
+        if (ev.ctrlKey || ev.metaKey) return select(i, false, 'toggle');
+        if (ev.shiftKey) return select(i, false, 'range');
+        if ((sel === i && chosen.size === 1 && chosen.has(x.name)) || matchMedia('(hover:none)').matches) open(x); else select(i, false);
+      });
+      b.addEventListener('dblclick', ev => { if (!ev.ctrlKey && !ev.shiftKey) open(x); });
+      b.addEventListener('contextmenu', ev => { ev.preventDefault(); const i = shown.indexOf(x); if (!chosen.has(x.name)) select(i, false); else { sel = i; paint(); } itemMenu(x, ev); });
       grid.appendChild(b);
     }
-    select(Math.min(sel, shown.length - 1), false);
+    sel = Math.min(sel, Math.max(0, shown.length - 1)); paint();
   }
-  async function load() {
-    pane.args = { ...cur }; search.value = ''; sel = 0;
+  async function load(keep) {
+    pane.args = { ...cur }; if (!keep) { search.value = ''; sel = 0; chosen.clear(); }
     // A folder counts once the person stays in it, not each one passed through.
     clearTimeout(stay); const here = { kind: 'dir', root: cur.root, path: cur.path }; stay = setTimeout(() => remember(here), 4000);
-    const parts = cur.path ? cur.path.split('/') : [];
-    crumbs.innerHTML = '';
-    // The root is a switcher: every folder this PC shares.
-    const rb = el(`<button class="rootb">${svg('box', 'currentColor', 2.2)}${esc(cur.root)}${svg('down2', 'currentColor', 2.4)}</button>`);
-    rb.addEventListener('click', ev => { const r = rb.getBoundingClientRect(); menu(r.left, r.bottom + 6, roots.map(x => ({ label: x.name, icon: 'folder', hint: x.writable && state.role !== 'guest' ? 'can change' : 'look only', act: () => { cur = { root: x.name, path: '' }; load(); } }))); });
-    crumbs.appendChild(rb);
-    parts.forEach((p, i) => { crumbs.appendChild(el('<span class="chev">›</span>')); const b = el(`<button>${esc(p)}</button>`); b.addEventListener('click', () => { cur.path = parts.slice(0, i + 1).join('/'); load(); }); crumbs.appendChild(b); });
-    const acts = el(`<span class="acts"></span>`);
-    if (state.role !== 'guest') { const sb = el(`<button class="ib" title="Share this folder" aria-label="Share this folder">${svg('link', 'currentColor', 2.4)}</button>`); sb.addEventListener('click', () => openShare(cur.root, cur.path, !!writable())); acts.appendChild(sb); }
-    if (writable()) {
-      const nb = el(`<button class="ib" title="New folder" aria-label="New folder">${svg('newdir', 'currentColor', 2.2)}</button>`);
-      nb.addEventListener('click', async () => { const name = await ask('A name for the new folder'); if (!name) return; try { await api.post('/api/files/mkdir', { root: cur.root, path: cur.path, name }); load(); } catch (e) { toast(e.message, true); } });
-      const ub = el(`<label class="ib" title="Upload" aria-label="Upload">${svg('up', 'currentColor', 2.4)}<input type="file" multiple hidden></label>`);
-      ub.querySelector('input').addEventListener('change', ev => upload([...ev.target.files]));
-      acts.append(nb, ub);
-    }
-    crumbs.appendChild(acts);
-    drawPins();
-    grid.innerHTML = `<div class="empty">Opening…</div>`;
+    drawCrumbs(); drawPins();
+    if (!keep) grid.innerHTML = `<div class="empty">Opening…</div>`;
     try {
       const l = await api.get(`/api/files/list?${q({ root: cur.root, path: cur.path, limit: 4000 })}`);
       entries = (l.entries || []).filter(x => !x.name.startsWith('.')).sort((a, b) => (b.is_dir - a.is_dir) || a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
     } catch (e) { entries = []; grid.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+    for (const n of [...chosen]) if (!entries.some(x => x.name === n)) chosen.delete(n);
     draw();
   }
+  function drawCrumbs() {
+    const parts = cur.path ? cur.path.split('/') : [];
+    crumbs.innerHTML = '';
+    // The root is a switcher: every folder this PC shares.
+    const rb = el(`<button class="rootb">${svg('box', 'currentColor', 2.2)}${esc(cur.root)}${svg('down2', 'currentColor', 2.4)}</button>`);
+    rb.addEventListener('click', ev => { ev.stopPropagation(); const r = rb.getBoundingClientRect(); menu(r.left, r.bottom + 6, roots.map(x => ({ label: x.name, icon: 'folder', hint: x.writable ? 'can change' : 'look only', act: () => go(x.name, '') }))); });
+    crumbs.appendChild(rb);
+    parts.forEach((p, i) => { crumbs.appendChild(el('<span class="chev">›</span>')); const b = el(`<button>${esc(p)}</button>`); b.addEventListener('click', ev => { ev.stopPropagation(); cur.path = parts.slice(0, i + 1).join('/'); load(); }); crumbs.appendChild(b); });
+    crumbs.appendChild(el('<span class="fill" aria-hidden="true"></span>'));
+    const acts = el(`<span class="acts"></span>`);
+    if (state.role !== 'guest') { const sb = el(`<button class="ib" title="Share this folder" aria-label="Share this folder">${svg('link', 'currentColor', 2.4)}</button>`); sb.addEventListener('click', ev => { ev.stopPropagation(); openShare(cur.root, cur.path, !!writable()); }); acts.appendChild(sb); }
+    const zb = el(`<button class="ib" title="Download this folder as a zip" aria-label="Download this folder as a zip">${svg('down', 'currentColor', 2.4)}</button>`); zb.addEventListener('click', ev => { ev.stopPropagation(); save(zipUrl([], cur.path ? cur.path.split('/').pop() : cur.root)); }); acts.appendChild(zb);
+    if (writable()) {
+      const nb = el(`<button class="ib" title="New folder" aria-label="New folder">${svg('newdir', 'currentColor', 2.2)}</button>`);
+      nb.addEventListener('click', ev => { ev.stopPropagation(); newFolder(); });
+      const ub = el(`<label class="ib" title="Upload" aria-label="Upload">${svg('up', 'currentColor', 2.4)}<input type="file" multiple hidden></label>`);
+      ub.addEventListener('click', ev => ev.stopPropagation());
+      ub.querySelector('input').addEventListener('change', ev => upload([...ev.target.files]));
+      acts.append(nb, ub);
+    }
+    crumbs.appendChild(acts);
+  }
+  async function newFolder() { const name = await ask('A name for the new folder'); if (!name) return; try { await api.post('/api/files/mkdir', { root: cur.root, path: cur.path, name }); load(true); } catch (e) { toast(e.message, true); } }
+  /* Typing a path: click the bar's empty part. Tab takes the suggestion,
+     ↑/↓ choose another, Enter goes, Esc puts the folders back. Paths are
+     this PC's own (/home/…) for the owner; a guest types the folder names. */
+  const rootPath = n => { const r = roots.find(x => x.name === n); return r?.path || '/' + n; };
+  const absOf = (r, rel) => rootPath(r) + (rel ? '/' + rel : '');
+  function where(abs) {
+    let best = null;
+    for (const r of roots) { const p = rootPath(r.name); if ((abs === p || abs.startsWith(p + '/')) && (!best || p.length > rootPath(best.name).length)) best = r; }
+    return best ? { root: best.name, rel: abs.slice(rootPath(best.name).length).replace(/^\/+|\/+$/g, '') } : null;
+  }
+  const listCache = new Map();
+  async function dirsIn(abs) {
+    if (listCache.has(abs)) return listCache.get(abs);
+    let out = [];
+    const w = where(abs);
+    if (w) { try { const l = await api.get(`/api/files/list?${q({ root: w.root, path: w.rel, limit: 4000 })}`); out = (l.entries || []).filter(x => x.is_dir && !x.name.startsWith('.')).map(x => x.name); } catch (e) {} }
+    else { const pre = abs === '/' ? '/' : abs + '/'; out = [...new Set(roots.map(r => rootPath(r.name)).filter(p => p.startsWith(pre)).map(p => p.slice(pre.length).split('/')[0]))]; }
+    out.sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
+    listCache.set(abs, out); return out;
+  }
+  function editPath() {
+    if (crumbs.querySelector('.pathin')) return;
+    const box = el(`<div class="pathbox"><input class="pathin" spellcheck="false" autocomplete="off" aria-label="Path"><span class="ghost" aria-hidden="true"></span><div class="sugg" role="listbox"></div></div>`);
+    const inp = box.querySelector('input'), ghost = box.querySelector('.ghost'), sugg = box.querySelector('.sugg');
+    crumbs.replaceChildren(box);
+    inp.value = absOf(cur.root, cur.path) + '/';
+    inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length);
+    let list = [], pick = 0, n = 0;
+    async function suggest() {
+      const my = ++n, v = inp.value, cut = v.lastIndexOf('/');
+      const dir = cut <= 0 ? '/' : v.slice(0, cut), part = v.slice(cut + 1).toLowerCase();
+      const all = await dirsIn(dir); if (my !== n) return;
+      list = all.filter(d => d.toLowerCase().startsWith(part)).slice(0, 8); pick = Math.min(pick, Math.max(0, list.length - 1));
+      sugg.innerHTML = list.map((d, i) => `<button type="button" role="option" aria-selected="${i === pick}" data-i="${i}">${svg('folder', '#E5A23A', 2.2)}<span><b>${esc(d.slice(0, part.length))}</b>${esc(d.slice(part.length))}</span></button>`).join('');
+      sugg.querySelectorAll('button').forEach(b => b.addEventListener('mousedown', ev => { ev.preventDefault(); pick = +b.dataset.i; take(); }));
+      // The rest of the suggestion, shown faintly after what's typed.
+      ghost.textContent = list[pick] ? list[pick].slice(part.length) : '';
+      ghost.style.left = `calc(14px + ${measure(v)}px)`;
+    }
+    const cv = document.createElement('canvas').getContext('2d');
+    const measure = t => { cv.font = getComputedStyle(inp).font; return cv.measureText(t).width; };
+    function take() { const v = inp.value, cut = v.lastIndexOf('/'); if (!list[pick]) return; inp.value = v.slice(0, cut + 1) + list[pick] + '/'; pick = 0; suggest(); }
+    const close = () => { n++; drawCrumbs(); };
+    function goTo() {
+      const v = inp.value.trim().replace(/\/+$/, '') || '/';
+      const w = where(v.startsWith('/') ? v : '/' + v);
+      if (!w) { toast("That isn't in a folder this PC shares.", true); return; }
+      cur = { root: w.root, path: w.rel }; load(); grid.focus({ preventScroll: true });
+    }
+    inp.addEventListener('input', () => { pick = 0; suggest(); });
+    inp.addEventListener('keydown', e => {
+      if (e.key === 'Tab') { e.preventDefault(); take(); }
+      else if (e.key === 'ArrowDown') { e.preventDefault(); pick = (pick + 1) % Math.max(1, list.length); suggest(); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); pick = (pick - 1 + list.length) % Math.max(1, list.length); suggest(); }
+      else if (e.key === 'Enter') { e.preventDefault(); goTo(); }
+      else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); }
+      e.stopPropagation();
+    });
+    inp.addEventListener('blur', () => setTimeout(() => { if (!box.contains(document.activeElement) && box.isConnected) close(); }, 120));
+    suggest();
+  }
+  crumbs.addEventListener('click', ev => { if (!ev.target.closest('button, label, .pathbox')) editPath(); });
   async function upload(files) {
     for (const f of files) {
       toast(`Uploading ${f.name}…`);
       try { await call('POST', `/api/files/upload?${q({ root: cur.root, path: cur.path, name: f.name })}`, f, true); }
       catch (e) { toast(`${f.name}: ${e.message}`, true); }
     }
-    load();
+    load(true);
   }
   search.addEventListener('input', () => { sel = 0; draw(); });
   search.addEventListener('keydown', e => { if (e.key === 'Enter' && shown[0]) open(shown[sel] || shown[0]); if (e.key === 'ArrowDown') { grid.focus(); select(0); e.preventDefault(); } if (e.key === 'Escape' && search.value) { e.stopPropagation(); search.value = ''; draw(); } });
-  // Type to jump: letters select the first name that starts with them.
+  // Keys: arrows (Shift to extend), Enter, Backspace, Delete, F2, Ctrl+A,
+  // Ctrl+F, L to type a path; letters jump to the first name that starts so.
   root.addEventListener('keydown', e => {
-    if (e.target === search || e.ctrlKey || e.metaKey || e.altKey) return;
-    const cols = Math.max(1, Math.round(grid.clientWidth / (grid.querySelector('.thing')?.offsetWidth + 14 || 160)));
-    if (e.key === 'ArrowRight') select(sel + 1); else if (e.key === 'ArrowLeft') select(sel - 1);
-    else if (e.key === 'ArrowDown') select(sel + cols); else if (e.key === 'ArrowUp') select(sel - cols);
-    else if (e.key === 'Enter' && shown[sel]) open(shown[sel]);
-    else if (e.key === 'Backspace' && cur.path) { cur.path = cur.path.split('/').slice(0, -1).join('/'); load(); }
-    else if (e.key === 'ContextMenu' && shown[sel]) { const r = grid.querySelectorAll('.thing')[sel].getBoundingClientRect(); itemMenu(shown[sel], { clientX: r.left + 20, clientY: r.top + 20 }); }
-    else if (e.key === 'f' && (e.ctrlKey || e.metaKey)) { search.focus(); }
-    else if (e.key.length === 1 && /\S/.test(e.key)) {
-      const now = performance.now(); typed = (now - typedAt > 900 ? '' : typed) + e.key.toLowerCase(); typedAt = now;
+    if (e.target.closest('input')) return;
+    const k = e.key, ext = e.shiftKey ? 'range' : 'only';
+    const cols = Math.max(1, Math.round(grid.clientWidth / ((things()[0]?.offsetWidth || 140) + 10)));
+    if ((e.ctrlKey || e.metaKey) && k.toLowerCase() === 'a') { shown.forEach(x => chosen.add(x.name)); paint(); }
+    else if ((e.ctrlKey || e.metaKey) && k.toLowerCase() === 'f') search.focus();
+    else if ((e.ctrlKey || e.metaKey) && k.toLowerCase() === 'l') editPath();
+    else if (e.ctrlKey || e.metaKey || e.altKey) return;
+    else if (k === 'ArrowRight') select(sel + 1, true, ext); else if (k === 'ArrowLeft') select(sel - 1, true, ext);
+    else if (k === 'ArrowDown') select(sel + cols, true, ext); else if (k === 'ArrowUp') select(sel - cols, true, ext);
+    else if (k === 'Enter' && shown[sel]) open(shown[sel]);
+    else if (k === 'Backspace' && cur.path) { cur.path = cur.path.split('/').slice(0, -1).join('/'); load(); }
+    else if (k === 'Delete' && writable()) removeAll(chosen.size ? picked() : shown[sel] ? [shown[sel]] : []);
+    else if (k === 'F2' && writable() && shown[sel]) rename(shown[sel]);
+    else if (k === 'Escape' && chosen.size > 1) { chosen.clear(); if (shown[sel]) chosen.add(shown[sel].name); paint(); }
+    else if (k === 'ContextMenu' && shown[sel]) { const r = things()[sel].getBoundingClientRect(); itemMenu(shown[sel], { clientX: r.left + 20, clientY: r.top + 20 }); }
+    else if (k === '/') editPath();
+    else if (k.length === 1 && /\S/.test(k)) {
+      const now = performance.now(); typed = (now - typedAt > 900 ? '' : typed) + k.toLowerCase(); typedAt = now;
       const i = shown.findIndex(x => x.name.toLowerCase().startsWith(typed));
       if (i >= 0) select(i);
     } else return;
     e.preventDefault();
   });
-  root.addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key === 'f') { e.preventDefault(); search.focus(); } });
+  // A box drawn on the empty part chooses what it touches.
+  grid.addEventListener('pointerdown', ev => {
+    if (ev.button !== 0 || ev.target.closest('.thing') || matchMedia('(hover:none)').matches) return;
+    const g = grid.getBoundingClientRect(), sx = ev.clientX, sy = ev.clientY + grid.scrollTop, add = ev.ctrlKey || ev.metaKey, before = new Set(chosen);
+    const band = el('<div class="band"></div>'); let on = false;
+    grid.focus({ preventScroll: true });
+    track(m => {
+      const x = m.clientX, y = m.clientY + grid.scrollTop;
+      if (!on) { if (Math.hypot(x - sx, y - sy) < 5) return; on = true; grid.appendChild(band); }
+      const l = Math.min(x, sx) - g.left, t = Math.min(y, sy) - g.top, w = Math.abs(x - sx), h = Math.abs(y - sy);
+      Object.assign(band.style, { left: l + 'px', top: t + 'px', width: w + 'px', height: h + 'px' });
+      chosen.clear(); if (add) before.forEach(n => chosen.add(n));
+      things().forEach((tEl, j) => { const r = tEl.getBoundingClientRect(), rt = r.top - g.top + grid.scrollTop, rl = r.left - g.left; if (rl < l + w && rl + r.width > l && rt < t + h && rt + r.height > t) chosen.add(shown[j].name); });
+      paint();
+    }, () => { band.remove(); if (!on && !add) { chosen.clear(); paint(); } });
+  });
   grid.addEventListener('contextmenu', ev => { if (ev.target.closest('.thing')) return; ev.preventDefault(); const w = writable(); menu(ev.clientX, ev.clientY, [
-    w && { label: 'New folder…', icon: 'newdir', act: async () => { const name = await ask('A name for the new folder'); if (!name) return; try { await api.post('/api/files/mkdir', { root: cur.root, path: cur.path, name }); load(); } catch (e) { toast(e.message, true); } } },
+    w && { label: 'New folder…', icon: 'newdir', act: newFolder },
+    { label: 'Choose everything', icon: 'check', hint: 'Ctrl+A', act: () => { shown.forEach(x => chosen.add(x.name)); paint(); } },
+    { label: 'Download this folder as a zip', icon: 'down', act: () => save(zipUrl([], cur.path ? cur.path.split('/').pop() : cur.root)) },
     { label: pinned(cur.root, cur.path) ? 'Unpin this folder' : 'Pin this folder', icon: 'pin', act: () => pin(cur.root, cur.path, !pinned(cur.root, cur.path)) },
     state.role !== 'guest' && { label: 'Share this folder…', icon: 'link', act: () => openShare(cur.root, cur.path, !!w) },
+    { label: 'Type a path', icon: 'pen', hint: '/', act: editPath },
     cur.path && { label: 'Up a folder', icon: 'up', hint: 'Backspace', act: () => { cur.path = cur.path.split('/').slice(0, -1).join('/'); load(); } },
   ]); });
-  root.addEventListener('dragover', e => { if (writable()) { e.preventDefault(); grid.classList.add('over'); } });
+  root.addEventListener('dragover', e => { if (writable() && e.dataTransfer?.types?.includes('Files')) { e.preventDefault(); grid.classList.add('over'); } });
   root.addEventListener('dragleave', () => grid.classList.remove('over'));
-  root.addEventListener('drop', e => { e.preventDefault(); grid.classList.remove('over'); upload([...e.dataTransfer.files]); });
+  root.addEventListener('drop', e => { e.preventDefault(); grid.classList.remove('over'); if (e.dataTransfer.files.length) upload([...e.dataTransfer.files]); });
   api.get('/api/files/roots').then(rs => {
     roots = rs;
     if (!rs.length) { grid.innerHTML = `<div class="empty">${state.role === 'guest' ? 'No folders are open to guests here.' : 'No folders are shared in prism.toml yet.'}</div>`; return; }
-    if (!cur.root || !rs.some(r => r.name === cur.root)) cur = { root: (state.pins.find(p => rs.some(r => r.name === p.root)) || { root: rs[0].name }).root, path: (state.pins.find(p => rs.some(r => r.name === p.root)) || { path: '' }).path };
+    if (!cur.root || !rs.some(r => r.name === cur.root)) { const p0 = state.pins.find(p => rs.some(r => r.name === p.root)); cur = p0 ? { ...p0 } : { root: rs[0].name, path: '' }; }
     load(); setTimeout(() => grid.focus({ preventScroll: true }), 50);
   }).catch(e => { grid.innerHTML = `<div class="empty">${esc(e.message)}</div>`; });
   return root;
@@ -958,11 +1184,18 @@ function photosApp(args) {
   let list = args.list && args.list.length ? args.list : [args.name], at = Math.max(0, list.indexOf(args.name));
   const img = root.querySelector('.photo img'), film = root.querySelector('.film');
   const pathOf = n => args.dir ? `${args.dir}/${n}` : n;
+  const srcOf = n => /\.(gif|svg|apng)$/i.test(n) ? `/api/files/raw?${q({ root: args.root, path: pathOf(n) })}` : `/api/files/preview?${q({ root: args.root, path: pathOf(n) })}`;
   function show(i) {
     at = (i + list.length) % list.length; const n = list[at];
     remember({ kind: 'photo', root: args.root, path: pathOf(n) });
     img.style.opacity = 0;
-    const next = new Image(); next.onload = () => { img.src = next.src; img.style.opacity = 1; }; next.src = `/api/files/raw?${q({ root: args.root, path: pathOf(n) })}`;
+    // A screen-sized copy first (a few hundred KB, made once and kept), then
+    // the neighbours, so stepping through is instant. Moving pictures and
+    // drawings are shown as they are.
+    const next = new Image(); next.decoding = 'async';
+    next.onload = () => { if (list[at] !== n) return; img.src = next.src; img.style.opacity = 1; };
+    next.src = srcOf(n);
+    [1, -1, 2].forEach(d => { const m = list[(at + d + list.length) % list.length]; if (m && m !== n) { const pre = new Image(); pre.src = srcOf(m); } });
     root.querySelector('.info').innerHTML = `<b>${esc(n)}</b><span>${esc(args.root)}${args.dir ? ' › ' + esc(args.dir) : ''} · ${at + 1} of ${list.length}</span>`;
     film.querySelectorAll('button').forEach((b, j) => b.setAttribute('aria-pressed', String(j === at)));
     film.children[at]?.scrollIntoView({ block: 'nearest', inline: 'center', behavior: reduce ? 'auto' : 'smooth' });
@@ -983,7 +1216,7 @@ function photosApp(args) {
 // ←/→ five, ↑/↓ volume, M mute, F full screen, [ ] speed, 0–9 jump.
 const SPEEDS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 3];
 function videosApp(args, body, pane) {
-  const root = el(`<div class="player" tabindex="0"><div class="stage"><video playsinline preload="metadata"></video><div class="bigplay">${svg('play', '#fff', 2.4)}</div><div class="osd"></div></div>
+  const root = el(`<div class="player" tabindex="0"><div class="stage"><video playsinline preload="auto"></video><div class="bigplay">${svg('play', '#fff', 2.4)}</div><div class="osd"></div></div>
     <div class="vbar"><input class="seek" type="range" min="0" max="1000" value="0" aria-label="Position"><div class="vrow">
       <button class="vb play" aria-label="Play">${svg('play', 'currentColor', 2.4)}</button>
       <span class="time">0:00 / 0:00</span>
@@ -1061,10 +1294,14 @@ function videosApp(args, body, pane) {
     { label: 'Download', icon: 'down', act: () => { const a = document.createElement('a'); a.href = `/api/files/raw?${q({ root: args.root, path: args.path, download: true })}`; a.download = args.name; a.click(); } },
     { label: 'Show in Files', icon: 'folder', act: () => openApp('files', { root: args.root, path: args.path.split('/').slice(0, -1).join('/') }) },
   ]); });
-  meta.textContent = 'Checking how to play it…';
+  // What browsers play as they are starts at once; the check runs beside
+  // it, and only a file that needs rewrapping or converting is switched.
+  const raw = `/api/files/raw?${q({ root: args.root, path: args.path })}`;
+  if (/\.(mp4|m4v|webm|mov|mp3|m4a|ogg|opus|wav|flac|aac)$/i.test(args.path)) { v.src = raw; meta.textContent = 'Played as it is'; }
+  else meta.textContent = 'Checking how to play it…';
   api.get(`/api/files/media?${q({ root: args.root, path: args.path })}`).then(info => {
     const k = info.playability?.kind;
-    if (k === 'direct') { v.src = `/api/files/raw?${q({ root: args.root, path: args.path })}`; meta.textContent = 'Played as it is'; }
+    if (k === 'direct') { if (v.getAttribute('src') !== raw) v.src = raw; meta.textContent = 'Played as it is'; }
     else if (k === 'remux' || k === 'transcode') { v.src = `/api/files/stream?${q({ root: args.root, path: args.path })}`; meta.textContent = `${k === 'remux' ? 'Rewrapped' : 'Converted on this PC'} as it plays, for this browser${k === 'transcode' ? ' (seeking starts it again from there)' : ''}`; }
     else { meta.textContent = "This browser can't play it, and it can't be converted."; }
     v.playbackRate = prefs.rate; sync();
@@ -1292,12 +1529,25 @@ function solisApp(args, body) {
 // fallback. Same session either way: the browser sends this host's cookies
 // whatever the port.
 function webApp(args, body, pane) {
-  const id = pane.id.slice(4);
-  const f = el(`<iframe class="webpane" title="${esc(id)}" allow="fullscreen; clipboard-read; clipboard-write; autoplay"></iframe>`);
-  api.get(`/api/facets/${encodeURIComponent(id)}/port`)
-    .then(r => { f.src = `${location.protocol}//${location.hostname}:${r.port}/`; })
-    .catch(() => { f.src = `/facet/${encodeURIComponent(id)}/`; });
-  return f;
+  const id = pane.id.slice(4), f0 = facets.find(x => x.id === id);
+  const name = f0 ? (f0.expose?.title || f0.name) : id;
+  const root = el(`<div class="webwrap"><iframe class="webpane" title="${esc(name)}" allow="fullscreen; clipboard-read; clipboard-write; autoplay"></iframe><div class="waiting"><span class="orb"><i></i><i></i><i></i></span><b>Starting ${esc(name)}…</b><p class="secs"></p></div></div>`);
+  const fr = root.querySelector('iframe'), wait = root.querySelector('.waiting'), secs = root.querySelector('.secs');
+  let closed = false;
+  const t0 = performance.now();
+  const tick = setInterval(() => { const n = Math.round((performance.now() - t0) / 1000); secs.textContent = n < 3 ? '' : n < 25 ? `${n} s` : `${n} s · some apps take a minute the first time`; }, 500);
+  // Shown only once it answers: a page opened before the app is up is a
+  // blank one.
+  (async () => {
+    while (!closed && !(await answers({ id }))) await new Promise(r => setTimeout(r, 600));
+    if (closed) return;
+    let src = `/facet/${encodeURIComponent(id)}/`;
+    try { const r = await api.get(`/api/facets/${encodeURIComponent(id)}/port`); src = `${location.protocol}//${location.hostname}:${r.port}/`; } catch (e) {}
+    fr.addEventListener('load', () => { clearInterval(tick); wait.classList.add('gone'); setTimeout(() => wait.remove(), 400); }, { once: true });
+    fr.src = src;
+  })();
+  body.__close = () => { closed = true; clearInterval(tick); };
+  return root;
 }
 // Open a hosted app: start it if it's stopped, and when it's a launcher that
 // waits for answers in a terminal (a pty), show that terminal, since a page
@@ -1309,8 +1559,11 @@ async function openHosted(id) {
   let running = f.state === 'running' || f.state === 'foreign';
   if (!running) {
     if (!(f.state === 'stopped' || f.state === 'failed') || !f.available) { toast(f.unavailable_because || `${f.name} isn't running.`, true); return; }
-    toast(`Starting ${f.name}…`);
-    try { await api.post(`/api/facets/${f.id}/start`); } catch (e) { toast(`${f.name} didn't start: ${e.message}`, true); return; }
+    // The window opens at once and says it's starting; the tile glows meanwhile.
+    $$(`[data-facet="${CSS.escape(f.id)}"]`).forEach(t => t.classList.add('starting'));
+    if (!f.pty) openApp('web:' + f.id);
+    try { await api.post(`/api/facets/${f.id}/start`); } catch (e) { toast(`${f.name} didn't start: ${e.message}`, true); closePane('web:' + f.id); return; }
+    finally { setTimeout(() => $$(`[data-facet="${CSS.escape(f.id)}"]`).forEach(t => t.classList.remove('starting')), 1500); }
   }
   if (f.pty) {
     const sess = (await api.get('/api/term').catch(() => ({ sessions: [] }))).sessions.find(s => s.title === f.name && !s.exited);
@@ -1320,14 +1573,12 @@ async function openHosted(id) {
       watchUp(f);
       return;
     }
-  } else if (!running) {
-    await new Promise(r => setTimeout(r, pol ? 12000 : 2000));
   }
   openApp('web:' + f.id);
 }
 // Does the app's page answer yet?
 async function answers(f) {
-  try { const r = await fetch(`/facet/${encodeURIComponent(f.id)}/`, { method: 'HEAD', credentials: 'same-origin' }); return r.status < 500; } catch (e) { return false; }
+  try { const r = await fetch(`/facet/${encodeURIComponent(f.id)}/`, { method: 'HEAD', credentials: 'same-origin' }); return r.status < 500 && r.status !== 404; } catch (e) { return false; }
 }
 function watchUp(f) {
   let n = 0;

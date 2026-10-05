@@ -22,6 +22,7 @@ mod files_api;
 mod links_api;
 mod accounts;
 mod ports;
+mod zip_api;
 mod solis;
 mod media;
 mod proxy;

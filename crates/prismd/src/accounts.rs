@@ -121,7 +121,7 @@ pub fn guest_may(method: &Method, path: &str) -> bool {
         "/" | "/api/health" | "/api/system" | "/api/auth/me" | "/api/auth/people" | "/api/auth/prompt" | "/api/vitals" => read,
         "/api/auth/logout" => true,
         p if p.starts_with("/ui/") => read,
-        p if ["/api/files/roots", "/api/files/list", "/api/files/raw", "/api/files/thumb", "/api/files/media", "/api/files/stream"].contains(&p) => read,
+        p if ["/api/files/roots", "/api/files/list", "/api/files/raw", "/api/files/thumb", "/api/files/preview", "/api/files/zip", "/api/files/media", "/api/files/stream"].contains(&p) => read,
         _ => false,
     }
 }

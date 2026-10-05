@@ -41,4 +41,5 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 # Streaming file bodies. Reading a 20 GB model into memory to serve it would be
 # a memory incident caused by the memory-incident daemon.
 tokio-util = { version = "0.7", features = ["io"] }
+zip = { version = "4.6", default-features = false }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "fs", "process", "time"] }

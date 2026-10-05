@@ -38,6 +38,8 @@ pub fn routes() -> Router<AppState> {
         .route("/api/files/upload", post(upload))
         .route("/api/files/media", get(media_info))
         .route("/api/files/stream", get(stream))
+        .route("/api/files/zip", get(crate::zip_api::zip))
+        .route("/api/files/preview", get(preview))
 }
 
 /// What would be needed to play this file, from its actual streams.
@@ -387,6 +389,9 @@ fn err(status: StatusCode, error: &'static str, detail: impl Into<String>) -> Re
 }
 
 /// Files need an unlocked session, like everything else that is not public.
+pub(crate) fn guard_pub(state: &AppState, headers: &HeaderMap) -> Option<Response> { guard(state, headers) }
+pub(crate) fn resolve_pub(state: &AppState, root: &str, rel: &str) -> Result<(fpath::Root, PathBuf), Response> { resolve(state, root, rel) }
+
 fn guard(state: &AppState, headers: &HeaderMap) -> Option<Response> {
     if state.roots.is_empty() {
         return Some(err(
@@ -419,6 +424,9 @@ fn resolve(state: &AppState, root: &str, rel: &str) -> Result<(fpath::Root, Path
 struct RootInfo {
     name: String,
     writable: bool,
+    /// Where it is on this PC, for typing paths; never told to a guest.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    path: Option<String>,
 }
 
 async fn roots(State(state): State<AppState>, headers: HeaderMap) -> Response {
@@ -434,7 +442,8 @@ async fn roots(State(state): State<AppState>, headers: HeaderMap) -> Response {
         .filter(|r| !guest || state.guest_roots.contains(&r.name))
         .map(|r| RootInfo {
             name: r.name.clone(),
-            writable: r.writable,
+            writable: r.writable && !guest,
+            path: (!guest).then(|| r.path.display().to_string()),
         })
         .collect();
     Json(roots).into_response()
@@ -635,6 +644,22 @@ fn parse_range(header: &str, len: u64) -> Option<(u64, u64)> {
 /// Suppressed at Red and above: spawning image and video decoders on a machine
 /// that is already short of memory is precisely the wrong thing to do, and the
 /// UI degrades to an icon.
+/// A picture at screen size: what the viewer shows first, in a fraction of
+/// the original's bytes (a phone photo is 4 MB; this is a few hundred KB).
+async fn preview(State(state): State<AppState>, headers: HeaderMap, Query(q): Query<FileQuery>) -> Response {
+    if let Some(d) = guard(&state, &headers) { return d }
+    let (_root, full) = match resolve(&state, &q.root, &q.path) { Ok(v) => v, Err(r) => return r };
+    match render_sized(&full, &state.thumb_dir, 2048).await {
+        Some(bytes) => Response::builder()
+            .header(header::CONTENT_TYPE, "image/jpeg")
+            .header(header::CACHE_CONTROL, "private, max-age=86400")
+            .body(axum::body::Body::from(bytes))
+            .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response()),
+        // Not something to shrink: the original, then.
+        None => raw(State(state), headers, Query(q)).await,
+    }
+}
+
 async fn thumb(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -672,6 +697,11 @@ async fn thumb(
 /// Keyed on mtime and size so an edited file re-renders without any
 /// invalidation logic, and identical requests are free after the first.
 pub(crate) async fn render_thumb(src: &std::path::Path, cache_dir: &std::path::Path) -> Option<Vec<u8>> {
+    render_sized(src, cache_dir, 512).await
+}
+
+/// A picture made to fit `size` pixels, cached by the file's identity.
+pub(crate) async fn render_sized(src: &std::path::Path, cache_dir: &std::path::Path, size: u32) -> Option<Vec<u8>> {
     let meta = tokio::fs::metadata(src).await.ok()?;
     if meta.is_dir() {
         return None;
@@ -690,6 +720,8 @@ pub(crate) async fn render_thumb(src: &std::path::Path, cache_dir: &std::path::P
         src.hash(&mut h);
         mtime.hash(&mut h);
         meta.len().hash(&mut h);
+        // 512 keeps its old key, so thumbnails already made stay made.
+        if size != 512 { size.hash(&mut h); }
         format!("{:016x}.jpg", h.finish())
     };
     let cached = cache_dir.join(&key);
@@ -706,7 +738,7 @@ pub(crate) async fn render_thumb(src: &std::path::Path, cache_dir: &std::path::P
     let ok = match kind {
         list::Kind::Image => run(
             "vips",
-            &["thumbnail", &src_s, &format!("{out_s}[Q=82]"), "512"],
+            &["thumbnail", &src_s, &format!("{out_s}[Q=82]"), &size.to_string(), "--size", "down"],
         )
         .await,
         list::Kind::Video => {
@@ -717,7 +749,7 @@ pub(crate) async fn render_thumb(src: &std::path::Path, cache_dir: &std::path::P
                 "ffmpeg",
                 &[
                     "-ss", "00:00:03", "-i", &src_s, "-frames:v", "1",
-                    "-vf", "scale=512:-1", "-y", "-loglevel", "error", &out_s,
+                    "-vf", &format!("scale={size}:-1"), "-y", "-loglevel", "error", &out_s,
                 ],
             )
             .await
@@ -726,7 +758,7 @@ pub(crate) async fn render_thumb(src: &std::path::Path, cache_dir: &std::path::P
             let stem = out_s.trim_end_matches(".jpg").to_string();
             let ok = run(
                 "pdftoppm",
-                &["-jpeg", "-f", "1", "-l", "1", "-scale-to", "512", &src_s, &stem],
+                &["-jpeg", "-f", "1", "-l", "1", "-scale-to", &size.to_string(), &src_s, &stem],
             )
             .await;
             // pdftoppm appends a page suffix; normalise it to the cache key.
