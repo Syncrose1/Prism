@@ -648,6 +648,9 @@ fn parse_range(header: &str, len: u64) -> Option<(u64, u64)> {
 /// the original's bytes (a phone photo is 4 MB; this is a few hundred KB).
 async fn preview(State(state): State<AppState>, headers: HeaderMap, Query(q): Query<FileQuery>) -> Response {
     if let Some(d) = guard(&state, &headers) { return d }
+    // Under pressure nothing is made: the original is sent as it is.
+    let tier = state.vitals.read().expect("vitals poisoned").tier.clone();
+    if matches!(tier.as_str(), "red" | "black") { return raw(State(state), headers, Query(q)).await }
     let (_root, full) = match resolve(&state, &q.root, &q.path) { Ok(v) => v, Err(r) => return r };
     match render_sized(&full, &state.thumb_dir, 2048).await {
         Some(bytes) => Response::builder()

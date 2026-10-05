@@ -568,3 +568,14 @@ button.pill { cursor: pointer; }
 .shelf .tiles .m .mono { font-size: 28px; }
 .shelf .tiles { grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); }
 .talk .note .btn { justify-self: center; margin-top: 6px; }
+
+/* Critical Functions (ADR 0002) */
+.critical { position: fixed; z-index: 70; left: 50%; bottom: 16px; transform: translate(-50%, 16px); width: min(720px, calc(100vw - 24px)); display: flex; align-items: center; gap: 12px; background: var(--plate); color: var(--ink); border-radius: var(--radius-s); padding: 10px 10px 10px 16px; box-shadow: 0 18px 50px rgba(16,20,24,.3), inset 0 0 0 2px var(--bad); opacity: 0; transition: opacity .3s, transform .3s cubic-bezier(.2,1,.3,1); }
+.critical.on { opacity: 1; transform: translate(-50%, 0); }
+.critical.hidden { opacity: 0; pointer-events: none; }
+.critical .say { flex: 1; font-size: 14.5px; line-height: 1.45; }
+.critical .lamp { width: 14px; height: 14px; flex: none; }
+.critical .btn { text-decoration: none; white-space: nowrap; }
+.critical .b { width: 28px; height: 28px; border-radius: 50%; border: 0; background: transparent; color: var(--ink-soft); display: grid; place-items: center; cursor: pointer; }
+.critical .b svg { width: 12px; height: 12px; }
+@media (max-width: 640px) { .critical { flex-wrap: wrap; } }

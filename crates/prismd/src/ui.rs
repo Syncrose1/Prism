@@ -23,6 +23,19 @@ pub async fn index() -> Response {
     serve("os.html")
 }
 
+/// `/`, as ADR 0002 has it: at Red or Black the page that opens is the
+/// rescue page (no JavaScript, nothing to load), unless the person insists
+/// (`/?full=1`). A desktop already open isn't reloaded under them: it
+/// shows a banner pointing here instead (os.js).
+pub async fn index_for(axum::extract::State(state): axum::extract::State<crate::api::AppState>, axum::extract::RawQuery(q): axum::extract::RawQuery) -> Response {
+    let tier = state.vitals.read().map(|v| v.tier.clone()).unwrap_or_default();
+    let insist = q.as_deref().is_some_and(|q| q.split('&').any(|p| p == "full=1"));
+    if matches!(tier.as_str(), "red" | "black") && !insist {
+        return axum::response::Redirect::temporary("/rescue").into_response();
+    }
+    index().await
+}
+
 /// The first shell, kept while the new one grows to cover all it does.
 pub async fn classic() -> Response {
     serve("shell.html")

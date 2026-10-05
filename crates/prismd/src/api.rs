@@ -44,6 +44,10 @@ pub struct Vitals {
     /// single used figure, because on this host the two halves mean opposite
     /// things: see `prism_core::sensors::gpu`.
     pub vram: Option<VramVitals>,
+    /// Which signal drove the tier (`stall`, `headroom`, `disk`, `vram`,
+    /// `spill`, or `none` at Green), so a person is told why.
+    #[serde(default)]
+    pub driver: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -99,7 +103,20 @@ impl Vitals {
                 inodes_used_pct: d.inodes_used_pct(),
             }),
             vram,
+            driver: String::new(),
         }
+    }
+}
+
+/// A tier's driver, said to a person.
+pub fn driver_said(d: &str) -> &'static str {
+    match d {
+        "stall" => "the machine is stalling on memory",
+        "headroom" => "memory is running out",
+        "disk" => "the disk is nearly full",
+        "vram" => "the graphics card's memory is full",
+        "spill" => "a model is spilling out of the graphics card into memory",
+        _ => "nothing is pressing",
     }
 }
 
@@ -177,7 +194,7 @@ pub fn router(state: AppState) -> Router {
         .merge(crate::solis::routes())
         .merge(crate::workspace::routes())
         .merge(crate::proxy::routes())
-        .route("/", get(crate::ui::index))
+        .route("/", get(crate::ui::index_for))
         .route("/classic", get(crate::ui::classic))
         .route("/ui/{*path}", get(crate::ui::asset))
         .layer(axum::middleware::from_fn_with_state(audited, audit))

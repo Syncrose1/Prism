@@ -126,3 +126,20 @@ goal; it stops being a hard safety requirement.
 Rescue first. It is the floor, it is small, and everything else layers above it.
 Building the desktop first would mean the safety-critical artefact is the one
 written last and least carefully.
+
+## Built (5 Oct 2026)
+
+* `/` at Red or Black answers with the rescue page (`ui::index_for`, a
+  307 to `/rescue`); `/?full=1` opens the desktop anyway. Tried with a
+  throwaway Prism whose floors read Red: `/` → `/rescue`, `?full=1` → the
+  desktop.
+* A desktop already open isn't reloaded: it shows a banner saying why
+  (the governor's driver, now in `Vitals.driver`) with the way to the
+  rescue page, gone again when the tier falls.
+* The rescue page says which signal drove the tier, lists the last fifteen
+  timeline events, and offers Stop only on services that are running.
+* Picture previews step down with thumbnails: at Red the original is sent,
+  nothing is made.
+* Left from the list above: reboot behind a confirmation (the person's to
+  ask for).
+

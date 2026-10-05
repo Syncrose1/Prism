@@ -1367,8 +1367,25 @@ function servicesApp(args, body) {
 let vitals = null; const spark = [];
 async function pollVitals() {
   if (!signedIn) return;
-  try { vitals = await api.get('/api/vitals'); spark.push(vitals.honest_headroom_mib); while (spark.length > 60) spark.shift(); renderVitalsWidgets(); renderVitalsPane(); } catch (e) {}
+  try { vitals = await api.get('/api/vitals'); spark.push(vitals.honest_headroom_mib); while (spark.length > 60) spark.shift(); renderVitalsWidgets(); renderVitalsPane(); critical(vitals); } catch (e) {}
   setTimeout(pollVitals, document.hidden ? 10000 : 2000);
+}
+// **Critical Functions** (ADR 0002): at Red or Black, a page opened fresh
+// is the rescue page; one already open isn't reloaded under the person
+// (they may be mid-action) but says so, with the way there.
+const DRIVER_SAID = { stall: 'the machine is stalling on memory', headroom: 'memory is running out', disk: 'the disk is nearly full', vram: "the graphics card's memory is full", spill: 'a model is spilling out of the graphics card' };
+function critical(v) {
+  const on = v.tier === 'red' || v.tier === 'black';
+  let b = $('#critical');
+  if (on && !b) {
+    b = el(`<div class="critical" id="critical" role="alert"><span class="lamp" data-t="red"></span><span class="say"></span><a class="btn bad" href="/rescue">Open the rescue page</a><button class="b x" aria-label="Hide">${svg('x', 'currentColor', 2.6)}</button></div>`);
+    b.querySelector('.x').addEventListener('click', () => b.classList.add('hidden'));
+    document.body.appendChild(b); requestAnimationFrame(() => b.classList.add('on'));
+  }
+  if (b) {
+    b.querySelector('.say').textContent = on ? `PRISM has stepped down: ${DRIVER_SAID[v.driver] || 'the PC is under pressure'}. It's stopping what it started if it has to. The rescue page needs nothing else to work.` : '';
+    if (!on) { b.classList.remove('on'); setTimeout(() => b.remove(), 400); }
+  }
 }
 const TIER_WORD = { green: "All's well", amber: 'Getting tight', red: 'Under pressure', black: 'Stepping in' };
 const TIER_SAY = { green: 'Nothing is using more than its share.', amber: 'Memory is getting short. PRISM looks four times a second and works out who is growing.', red: 'PRISM is asking the service that is growing to give memory back.', black: 'PRISM is stopping the service responsible, if PRISM started it, and nothing else.' };
@@ -1568,6 +1585,14 @@ function webApp(args, body, pane) {
   // Shown only once it answers: a page opened before the app is up is a
   // blank one.
   (async () => {
+    // Gone from this PC (removed since the window was saved): said, not waited on.
+    await loadServices();
+    if (!facets.some(f => f.id === id)) {
+      clearInterval(tick); wait.querySelector('.orb').remove();
+      wait.querySelector('b').textContent = `${name} isn't on this PC any more`;
+      secs.textContent = 'Its service was removed. Close this window, or find what replaced it on Home.';
+      return;
+    }
     while (!closed && !(await answers({ id }))) await new Promise(r => setTimeout(r, 600));
     if (closed) return;
     let src = `/facet/${encodeURIComponent(id)}/`;

@@ -203,6 +203,7 @@ impl Monitor {
                 if let Ok(mut vitals) = self.vitals.write() {
                     *vitals =
                         Vitals::from_sample(&mem, stall.full, tier_now, tightest, vram.clone());
+                    vitals.driver = format!("{:?}", self.governor.driver()).to_lowercase();
                 }
 
                 if let Some(tier) = self.governor.observe(&reading) {

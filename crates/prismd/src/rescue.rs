@@ -233,8 +233,9 @@ async fn page(State(state): State<AppState>, headers: HeaderMap) -> Response {
         html,
         r#"<h1>Prism — Critical Functions</h1>
 <p class="sub">Minimal recovery interface. No JavaScript. Always available at <code>/rescue</code>.</p>
-<p>State: <span class="tier {t}">{t}</span></p>"#,
-        t = esc(tier)
+<p>State: <span class="tier {t}">{t}</span>{why}</p>"#,
+        t = esc(tier),
+        why = if tier == "green" { String::new() } else { format!(" — {}", crate::api::driver_said(&vitals.driver)) }
     );
 
     // --- vitals -----------------------------------------------------------
@@ -275,15 +276,17 @@ async fn page(State(state): State<AppState>, headers: HeaderMap) -> Response {
                 .memory_current_kb(&facet.id)
                 .map(|kb| gib(kb / 1024))
                 .unwrap_or_else(|| "—".into());
+            // A stop button only where there's something to stop.
+            let stop = if matches!(status, prism_core::supervisor::FacetStatus::Running) {
+                format!(r#"<form method="post" action="/rescue/facet/stop"><input type="hidden" name="id" value="{}">
+<button type="submit">Stop</button></form>"#, esc(&facet.id))
+            } else { String::new() };
             let _ = write!(
                 html,
-                r#"<tr><td>{}</td><td>{:?}</td><td class="n">{}</td><td>
-<form method="post" action="/rescue/facet/stop"><input type="hidden" name="id" value="{}">
-<button type="submit">Stop</button></form></td></tr>"#,
+                r#"<tr><td>{}</td><td>{:?}</td><td class="n">{}</td><td>{stop}</td></tr>"#,
                 esc(&facet.name),
                 status,
                 mem,
-                esc(&facet.id)
             );
         }
         html.push_str("</table>");
@@ -326,6 +329,18 @@ async fn page(State(state): State<AppState>, headers: HeaderMap) -> Response {
 <input type="hidden" name="action" value="restart_shell">
 <button type="submit">Restart desktop shell (quickshell)</button></form>"#,
     );
+
+    // --- what happened lately: the timeline, newest first ---------------
+    let recent = state.events.recent(15);
+    if !recent.is_empty() {
+        html.push_str("<h2>Lately</h2><table><tr><th>When</th><th>What</th></tr>");
+        for e in recent {
+            let at = { let d = e.unix % 86_400; format!("{:02}:{:02}:{:02} UTC", d / 3600, d / 60 % 60, d % 60) };
+            let _ = write!(html, "<tr><td>{}</td><td>{} · {}</td></tr>", esc(&at), esc(&e.source), esc(&truncate(&e.message, 160)));
+        }
+        html.push_str("</table>");
+        if tier != "green" { html.push_str(r#"<p class="note">The full desktop is still there when you need it: <a href="/?full=1">open it anyway</a>.</p>"#); }
+    }
 
     // --- live figures, read fresh rather than from the published snapshot ---
     // If the monitor thread has died, the cached vitals above go stale silently.
