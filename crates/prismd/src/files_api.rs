@@ -524,7 +524,13 @@ async fn raw(
         Ok(v) => v,
         Err(r) => return r,
     };
+    send_file(&full, &headers, q.download.unwrap_or(false)).await
+}
 
+/// A file's bytes, with single-range requests (so a film seeks), as an
+/// attachment when [download]. Shared by Files and by share links.
+pub(crate) async fn send_file(full: &std::path::Path, headers: &HeaderMap, download: bool) -> Response {
+    let full = full.to_path_buf();
     let meta = match tokio::fs::metadata(&full).await {
         Ok(m) => m,
         Err(e) => return err(StatusCode::NOT_FOUND, "read_failed", e.to_string()),
@@ -579,7 +585,7 @@ async fn raw(
             format!("bytes {}-{}/{}", start, start + count - 1, len),
         );
     }
-    if q.download.unwrap_or(false) {
+    if download {
         resp = resp.header(
             header::CONTENT_DISPOSITION,
             format!("attachment; filename=\"{}\"", name.replace('"', "")),
@@ -661,7 +667,7 @@ async fn thumb(
 ///
 /// Keyed on mtime and size so an edited file re-renders without any
 /// invalidation logic, and identical requests are free after the first.
-async fn render_thumb(src: &std::path::Path, cache_dir: &std::path::Path) -> Option<Vec<u8>> {
+pub(crate) async fn render_thumb(src: &std::path::Path, cache_dir: &std::path::Path) -> Option<Vec<u8>> {
     let meta = tokio::fs::metadata(src).await.ok()?;
     if meta.is_dir() {
         return None;

@@ -123,6 +123,8 @@ pub struct AppState {
     /// Who signed in, from where, and what they changed: sealed
     /// (`prism_core::access`).
     pub access: Arc<prism_core::access::AccessLog>,
+    /// Share links (`prism_core::links`), kept in `$STATE/links.json`.
+    pub links: Arc<std::sync::Mutex<prism_core::links::Store>>,
     /// The port Prism itself is serving on, so the discovery sweep does not
     /// offer the operator their own desktop as an app to add to it.
     pub port: u16,
@@ -163,6 +165,7 @@ pub fn router(state: AppState) -> Router {
         .merge(crate::term_api::routes())
         .merge(crate::files_api::routes())
         .merge(crate::facets_api::routes())
+        .merge(crate::links_api::routes())
         .merge(crate::workspace::routes())
         .merge(crate::proxy::routes())
         .route("/", get(crate::ui::index))

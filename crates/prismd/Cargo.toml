@@ -19,7 +19,7 @@ libc = "0.2"
 # Minimal runtime: no fs/process/time features pulled in beyond what the server
 # needs. The monitor loop stays synchronous on its own thread so pressure
 # handling never waits on an async runtime that is itself starved.
-axum = { version = "0.8", features = ["ws"] }
+axum = { version = "0.8", features = ["ws", "multipart"] }
 # Splitting the WebSocket into an independent sink and stream, so terminal
 # output can be pumped while keystrokes are read concurrently.
 futures-util = { version = "0.3", default-features = false }

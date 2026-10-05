@@ -34,6 +34,7 @@ const ICONS = {
   star: '<path d="M12 2.5Q14 10 21.5 12Q14 14 12 21.5Q10 14 2.5 12Q10 10 12 2.5Z" fill="#33BFE2" stroke="none"/>',
   tiles: '<rect x="3" y="4" width="8" height="16" rx="2"/><rect x="13" y="4" width="8" height="7" rx="2"/><rect x="13" y="13" width="8" height="7" rx="2"/>',
   windows: '<rect x="3" y="7" width="12" height="11" rx="2"/><rect x="9" y="3" width="12" height="11" rx="2"/>',
+  link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
 };
 const svg = (n, c = '#fff', w = 2.6) => `<svg viewBox="0 0 24 24" fill="none" stroke="${c}" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[n]}</svg>`;
 
@@ -515,6 +516,10 @@ function filesApp(args, body, pane) {
     crumbs.innerHTML = '';
     const rb = el(`<button>${esc(cur.root)}</button>`); rb.addEventListener('click', () => { cur.path = ''; load(); }); crumbs.appendChild(rb);
     parts.forEach((p, i) => { crumbs.appendChild(el('<span>›</span>')); const b = el(`<button>${esc(p)}</button>`); b.addEventListener('click', () => { cur.path = parts.slice(0, i + 1).join('/'); load(); }); crumbs.appendChild(b); });
+    const sb = el(`<button class="btn">${svg('link', '#fff', 2.4)}Share</button>`);
+    sb.addEventListener('click', () => openShare(cur.root, cur.path, !!writable));
+    const shareWrap = el(`<span class="acts"></span>`); shareWrap.appendChild(sb);
+    if (!writable) crumbs.appendChild(shareWrap);
     if (writable) {
       const acts = el(`<span class="acts"><button class="btn q" data-a="dir">${svg('newdir', 'currentColor', 2.2)}Folder</button><label class="btn">${svg('up', '#fff', 2.4)}Upload<input type="file" multiple hidden></label></span>`);
       acts.querySelector('[data-a="dir"]').addEventListener('click', async () => {
@@ -522,6 +527,7 @@ function filesApp(args, body, pane) {
         try { await api.post('/api/files/mkdir', { root: cur.root, path: cur.path, name }); load(); } catch (e) { toast(e.message, true); }
       });
       acts.querySelector('input').addEventListener('change', ev => upload([...ev.target.files]));
+      acts.appendChild(sb);
       crumbs.appendChild(acts);
     }
     grid.innerHTML = `<div class="empty">Opening…</div>`;
@@ -535,7 +541,8 @@ function filesApp(args, body, pane) {
       const [ic, c] = KIND_ICON[x.kind] || KIND_ICON.other;
       const full = cur.path ? `${cur.path}/${x.name}` : x.name;
       const thumb = x.kind === 'image' || x.kind === 'video';
-      const b = el(`<button class="thing"><span class="th">${svg(ic, c, 2.2)}${thumb ? `<img loading="lazy" alt="" src="/api/files/thumb?${q({ root: cur.root, path: full })}" onerror="this.remove()">` : ''}</span><b title="${esc(x.name)}">${esc(x.name)}</b><small>${x.is_dir ? 'Folder' : bytes(x.size)}${x.modified ? ' · ' + ago(x.modified) : ''}</small></button>`);
+      const b = el(`<button class="thing"><span class="th">${svg(ic, c, 2.2)}${thumb ? `<img loading="lazy" alt="" src="/api/files/thumb?${q({ root: cur.root, path: full })}" onerror="this.remove()">` : ''}${x.is_dir ? `<span class="fshare" role="button" aria-label="Share ${esc(x.name)}" title="Share this folder">${svg('link', '#fff', 2.4)}</span>` : ''}</span><b title="${esc(x.name)}">${esc(x.name)}</b><small>${x.is_dir ? 'Folder' : bytes(x.size)}${x.modified ? ' · ' + ago(x.modified) : ''}</small></button>`);
+      const fs = b.querySelector('.fshare'); if (fs) fs.addEventListener('click', ev => { ev.stopPropagation(); openShare(cur.root, full, !!writable); });
       b.addEventListener('click', () => {
         if (x.is_dir) { cur.path = full; load(); }
         else if (x.kind === 'image') openApp('photos', { root: cur.root, dir: cur.path, name: x.name, list: images });
@@ -576,6 +583,89 @@ function ask(question) {
     s.querySelector('.btn.q').addEventListener('click', () => done(null));
     s.querySelector('.btn:not(.q)').addEventListener('click', () => done(i.value.trim() || null));
     i.addEventListener('keydown', e => { if (e.key === 'Enter') done(i.value.trim() || null); if (e.key === 'Escape') { e.stopPropagation(); done(null); } });
+  });
+}
+
+/* ── Share a link: one folder, for a while, doing only what was chosen ─ */
+const PROFILES = [
+  { id: 'look', n: 'Look', c: '#33BFE2', d: 'See and play what is there. Nothing leaves, nothing changes.', p: { see: true, stream: true } },
+  { id: 'take', n: 'Take', c: '#2E9E62', d: 'See, play and download.', p: { see: true, stream: true, down: true } },
+  { id: 'drop', n: 'Drop off', c: '#7C5CE0', d: 'Send files in. They see only what they sent.', p: { up: true, own: true }, writes: true },
+  { id: 'full', n: 'Work together', c: '#E5A23A', d: 'See, download, send, rename and remove, in this folder.', p: { see: true, stream: true, down: true, up: true, edit: true }, writes: true },
+  { id: 'custom', n: 'Customise', c: '#868B94', d: 'Choose exactly what they can do.', p: null },
+];
+const PERMS = [['see', 'See what is in the folder'], ['own', 'See only what they send'], ['stream', 'Open pictures, music and films'], ['down', 'Download'], ['up', 'Send files in', true], ['edit', 'Rename and remove', true]];
+const LASTS = [['1 hour', 3600], ['Until tonight', 'tonight'], ['3 days', 3 * 86400], ['A week', 7 * 86400]];
+let sh = null;
+function openShare(root, path, writable) {
+  sh = { root, path, writable, prof: writable ? 'drop' : 'look', perms: writable ? { up: true, own: true } : { see: true, stream: true }, lasts: 'tonight', once: false, history: [] };
+  let host = $('#shareSheet');
+  if (!host) {
+    document.body.appendChild(el('<div class="scrim" id="shareScrim"></div>'));
+    host = el(`<div class="share" id="shareSheet" role="dialog" aria-label="Share a link"></div>`); document.body.appendChild(host);
+    $('#shareScrim').addEventListener('click', closeShare);
+  }
+  api.get('/api/links').then(r => { sh.history = r.history || []; drawShare(); }).catch(() => {});
+  drawShare();
+  requestAnimationFrame(() => { $('#shareScrim').classList.add('on'); host.classList.add('on'); });
+}
+function closeShare() { $('#shareScrim')?.classList.remove('on'); $('#shareSheet')?.classList.remove('on'); }
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && $('#shareSheet')?.classList.contains('on')) { e.stopImmediatePropagation(); closeShare(); } }, true);
+function sayPerms(p) {
+  const v = [p.see ? 'see the folder' : p.own ? 'see only what they send' : null, p.stream && 'play', p.down && 'download', p.up && 'send files in', p.edit && 'rename and remove'].filter(Boolean);
+  return v.length ? v.join(', ') : 'nothing yet';
+}
+function drawShare() {
+  const h = $('#shareSheet'); if (!h || !sh) return;
+  const name = sh.path ? sh.path.split('/').pop() : sh.root;
+  h.innerHTML = `<button class="sx" aria-label="Close">${svg('x', 'currentColor', 2.6)}</button>
+    <div class="col"><div><h2><span class="tk" style="background:#E5A23A;width:32px;height:32px;border-radius:10px">${svg('folder')}</span>Share ${esc(name)}</h2><p class="sub">A link to this folder alone. Nothing above it or beside it exists for them.</p></div>
+      <div class="sgrp"><span>What they can do</span><div class="profiles"></div><div class="custom${sh.prof === 'custom' ? ' on' : ''}"></div></div>
+      <div class="sgrp hist-g"${sh.history.length ? '' : ' hidden'}><span>Used before</span><div class="hist"></div></div>
+      <div class="sgrp"><span>For how long</span><div class="seg lasts"></div>
+        <button class="toggle once" aria-pressed="${sh.once}"><span>Works once<small>The first device to open it keeps it; any other is refused.</small></span><span class="sw"></span></button></div></div>
+    <div class="col"><div class="sgrp"><span>What they'll see</span><div class="theirs"></div></div><button class="make">Make the link</button><div class="made"></div></div>`;
+  h.querySelector('.sx').addEventListener('click', closeShare);
+  const pf = h.querySelector('.profiles');
+  PROFILES.forEach(pr => {
+    const b = el(`<button class="prof" aria-pressed="${sh.prof === pr.id}"><b><i style="--c:${pr.c}"></i>${pr.n}</b><span>${pr.writes && !sh.writable ? 'Not for this folder: PRISM can only look at it.' : pr.d}</span></button>`);
+    if (pr.writes && !sh.writable) b.disabled = true;
+    b.addEventListener('click', () => { sh.prof = pr.id; if (pr.p) sh.perms = { ...pr.p }; drawShare(); });
+    pf.appendChild(b);
+  });
+  const cu = h.querySelector('.custom');
+  PERMS.forEach(([k, n, w]) => {
+    const b = el(`<button class="toggle" aria-pressed="${!!sh.perms[k]}"><span>${n}</span><span class="sw"></span></button>`);
+    if (w && !sh.writable) b.disabled = true;
+    b.addEventListener('click', () => { sh.perms[k] = !sh.perms[k]; if (k === 'see' && sh.perms.see) sh.perms.own = false; if (k === 'own' && sh.perms.own) sh.perms.see = false; drawShare(); });
+    cu.appendChild(b);
+  });
+  const hi = h.querySelector('.hist');
+  sh.history.filter(p => sh.writable || !(p.up || p.edit)).slice(0, 6).forEach(p => {
+    const b = el(`<button>${esc(sayPerms(p).replace(/^./, c => c.toUpperCase()))}</button>`);
+    b.addEventListener('click', () => { sh.prof = 'custom'; sh.perms = { ...p }; drawShare(); });
+    hi.appendChild(b);
+  });
+  const ls = h.querySelector('.lasts');
+  LASTS.forEach(([n, v]) => { const b = el(`<button aria-pressed="${sh.lasts === v}">${n}</button>`); b.addEventListener('click', () => { sh.lasts = v; drawShare(); }); ls.appendChild(b); });
+  h.querySelector('.once').addEventListener('click', () => { sh.once = !sh.once; drawShare(); });
+  const p = sh.perms;
+  h.querySelector('.theirs').innerHTML = `<div class="bar2"><span class="lamp" style="background:var(--live)"></span><b>${esc(name)}</b><span>· shared through PRISM</span></div>` +
+    (p.up ? `<div class="only">${svg('up', '#7C5CE0', 2.4)}Send files here<br><span>any kind, any size</span></div>` : '') +
+    (p.see || p.own ? `<div class="f">${svg('doc', 'var(--ink-soft)', 2.2).replace('<svg', '<svg style="width:20px;height:20px"')}${p.see ? 'everything in the folder' : 'only what they sent'}<span>${p.down ? 'downloadable' : p.stream ? 'to open' : 'listed'}</span></div>` : '') +
+    `<p class="gone">They can ${esc(sayPerms(p))}. The rest of this PC doesn't exist for them: no other folders, no Apps, no PC.</p>`;
+  h.querySelector('.make').addEventListener('click', async ev => {
+    const btn = ev.currentTarget; btn.disabled = true;
+    let secs = sh.lasts;
+    if (secs === 'tonight') { const t = new Date(); t.setHours(23, 59, 0, 0); secs = Math.max(3600, Math.round((t - Date.now()) / 1000)); }
+    try {
+      const r = await api.post('/api/links', { root: sh.root, path: sh.path, perms: sh.perms, lasts_secs: secs, once: sh.once, custom: sh.prof === 'custom' });
+      const url = location.origin + r.url_path;
+      btn.hidden = true;
+      const m = h.querySelector('.made');
+      m.innerHTML = `<div class="linkrow"><code>${esc(url)}</code><button class="btn">Copy</button></div><p class="sub">${esc(r.says.replace(/^./, c => c.toUpperCase()))}. It works wherever this PRISM is reachable; take it back any time in Activity, where every visit is sealed in the record.</p>`;
+      m.querySelector('.btn').addEventListener('click', e => { navigator.clipboard?.writeText(url).then(() => { e.target.textContent = 'Copied'; }, () => { const c = m.querySelector('code'); const rg = document.createRange(); rg.selectNodeContents(c); getSelection().removeAllRanges(); getSelection().addRange(rg); }); });
+    } catch (e) { btn.disabled = false; toast(e.message, true); }
   });
 }
 
@@ -705,7 +795,7 @@ function renderVitalsPane() {
 /* ── Activity: what happened, and who came in ────────────────────────── */
 function activityApp(args, body) {
   const root = el(`<div class="two"><div class="list"><h3 style="font-size:17px">What happened</h3><div class="list evs"></div></div>
-    <div class="list"><h3 style="font-size:17px">Who came in</h3><div class="seal"></div><div class="chips"></div><div class="list acc"></div></div></div>`);
+    <div class="list"><h3 style="font-size:17px">Who came in</h3><div class="seal"></div><div class="list links"></div><div class="chips"></div><div class="list acc"></div></div></div>`);
   let who = 'all';
   const KIND = { info: ['obs', 'Seen'], warn: ['warn', 'Needs a look'], action: ['act', 'PRISM did'], error: ['err', 'Failed'] };
   const ACC = { signedin: ['ver', 'Signed in'], refused: ['err', 'Refused'], changed: ['act', 'Changed'], signedout: ['obs', 'Signed out'] };
@@ -720,10 +810,20 @@ function activityApp(args, body) {
       const seal = root.querySelector('.seal');
       seal.classList.toggle('broken', !!v.broken_at);
       seal.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="${v.broken_at ? 'var(--bad)' : 'var(--good)'}" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 5-3 8-7 10-4-2-7-5-7-10V6z"/>${v.broken_at ? '<path d="M12 8v5M12 16v.5"/>' : '<path d="M8.5 12l2.5 2.5 4.5-5"/>'}</svg><span>${v.broken_at ? `<b>The record was changed.</b> Its chain breaks at entry ${v.broken_at}: something edited or removed what came after.` : `<b>Sealed.</b> Each entry carries the fingerprint of the one before, so nothing can be changed or removed without showing. ${v.entries || 0} entries, intact.`}</span>`;
+      try {
+        const L = await api.get('/api/links');
+        const live = (L.links || []).filter(l => l.live);
+        const box = root.querySelector('.links'); box.innerHTML = live.length ? '<div class="group">Links that still work</div>' : '';
+        live.forEach(l => {
+          const r = el(`<div class="row"><span class="ic" style="--c:#33BFE2">${svg('link', '#fff', 2.4)}</span><b>${esc(l.label)}</b><span class="meta">${esc(l.says)} · ${l.once ? 'one device · ' : ''}${l.visits} visit${l.visits === 1 ? '' : 's'}${l.received ? ` · ${l.received} received` : ''} · ends ${esc(new Date(l.expires * 1000).toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' }))}</span><span class="state"><button class="btn q">Take back</button></span></div>`);
+          r.querySelector('button').addEventListener('click', async () => { try { await api.post(`/api/links/${l.id}/revoke`); toast(`"${l.label}" no longer opens.`); draw(); } catch (e) { toast(e.message, true); } });
+          box.appendChild(r);
+        });
+      } catch (e) {}
       const people = new Set(['all']); (a.entries || []).forEach(e => { people.add(e.who); if (e.for_account) people.add(e.for_account); });
       const chips = root.querySelector('.chips'); chips.innerHTML = '';
-      [...people].forEach(p => { const b = el(`<button aria-pressed="${p === who}">${esc({ all: 'Everyone', admin: 'You (PRISM)', polaris: 'POLARIS', unknown: 'Refused' }[p] || p)}</button>`); b.addEventListener('click', () => { who = p; draw(); }); chips.appendChild(b); });
-      root.querySelector('.acc').innerHTML = (a.entries || []).map(e => { const [c, w] = ACC[e.kind] || ['obs', e.kind]; const name = e.who === 'admin' ? 'You' : e.who === 'polaris' ? `POLARIS${e.for_account ? ', for ' + esc(e.for_account) : ''}` : e.who === 'unknown' ? 'Someone' : esc(e.who); return `<div class="ev"><span class="when">${clock(e.unix)}</span><b><span class="tag ${c}">${w}</span> ${name}</b><p>${esc(e.what)} · ${esc(e.how)} · from ${esc(e.from)} · ${ago(e.unix)}</p></div>`; }).join('') || '<div class="empty">Nobody yet.</div>';
+      [...people].forEach(p => { const b = el(`<button aria-pressed="${p === who}">${esc({ all: 'Everyone', admin: 'You (PRISM)', polaris: 'POLARIS', unknown: 'Refused' }[p] || (p.startsWith('link:') ? 'Link: ' + p.slice(5) : p))}</button>`); b.addEventListener('click', () => { who = p; draw(); }); chips.appendChild(b); });
+      root.querySelector('.acc').innerHTML = (a.entries || []).map(e => { const [c, w] = ACC[e.kind] || ['obs', e.kind]; const name = e.who === 'admin' ? 'You' : e.who === 'polaris' ? `POLARIS${e.for_account ? ', for ' + esc(e.for_account) : ''}` : e.who === 'unknown' ? 'Someone' : e.who.startsWith('link:') ? `Through the link "${esc(e.who.slice(5))}"` : esc(e.who); return `<div class="ev"><span class="when">${clock(e.unix)}</span><b><span class="tag ${c}">${w}</span> ${name}</b><p>${esc(e.what)} · ${esc(e.how)} · from ${esc(e.from)} · ${ago(e.unix)}</p></div>`; }).join('') || '<div class="empty">Nobody yet.</div>';
     } catch (e) {}
   }
   draw(); const t = setInterval(() => { if (root.isConnected) draw(); }, 6000);

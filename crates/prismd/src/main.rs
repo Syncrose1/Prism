@@ -19,6 +19,7 @@ mod enrol;
 mod open;
 mod facets_api;
 mod files_api;
+mod links_api;
 mod media;
 mod proxy;
 mod rescue;
@@ -261,6 +262,7 @@ async fn serve(
         console_key,
         bridge_key,
         access,
+        links: std::sync::Arc::new(std::sync::Mutex::new(prism_core::links::Store::load(&state_dir))),
         grants: std::sync::Arc::new(prism_core::auth::console::Grants::new()),
         vitals,
         facets,
