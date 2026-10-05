@@ -425,9 +425,13 @@ async fn roots(State(state): State<AppState>, headers: HeaderMap) -> Response {
     if let Some(d) = guard(&state, &headers) {
         return d;
     }
+    // A guest is shown only the folders opened to guests.
+    let guest = state.auth.session_kind(crate::api::session_token(&headers).as_deref(), prism_core::auth::totp::now_unix())
+        == Some(prism_core::auth::session::TokenKind::Guest);
     let roots: Vec<RootInfo> = state
         .roots
         .iter()
+        .filter(|r| !guest || state.guest_roots.contains(&r.name))
         .map(|r| RootInfo {
             name: r.name.clone(),
             writable: r.writable,

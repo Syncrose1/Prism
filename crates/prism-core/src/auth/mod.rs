@@ -328,9 +328,28 @@ impl Authenticator {
         // Only a session token authorises. A device token proves enrolment and
         // nothing more, or a stolen laptop would need no password.
         match claims.kind {
-            TokenKind::Session => AuthOutcome::Granted,
+            TokenKind::Session | TokenKind::Guest => AuthOutcome::Granted,
             TokenKind::Device => AuthOutcome::Unauthenticated,
         }
+    }
+
+    /// A session for an account another program vouched for (an owner's, or
+    /// a guest's). The check itself happened outside: see prismd's accounts.
+    pub fn account_session(&self, owner: bool, now: u64) -> String {
+        self.reset_failures();
+        self.key.issue(Claims { expires_at: now + self.policy.session_ttl_secs, kind: if owner { TokenKind::Session } else { TokenKind::Guest } })
+    }
+
+    /// An account's password was wrong: counted with every other wrong
+    /// guess, so guessing accounts locks out like guessing codes.
+    pub fn account_refused(&self, now: u64) -> Option<u64> { self.record_failure(now) }
+
+    /// Seconds until guessing may resume, if it's locked.
+    pub fn locked(&self, now: u64) -> Option<u64> { self.locked_for(now) }
+
+    /// The kind of session a token carries, if it's a valid one.
+    pub fn session_kind(&self, token: Option<&str>, now: u64) -> Option<TokenKind> {
+        self.key.validate(token?, now).ok().map(|c| c.kind).filter(|k| *k != TokenKind::Device)
     }
 
     fn locked_for(&self, now: u64) -> Option<u64> {

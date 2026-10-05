@@ -60,6 +60,7 @@ p { margin: 0; }
 .people { display: flex; gap: 28px; flex-wrap: wrap; justify-content: center; }
 .person { border: 0; background: transparent; cursor: pointer; display: grid; justify-items: center; gap: 8px; font: 500 19px/1.2 var(--round); opacity: 0; transform: translateY(16px); transition: opacity .5s, transform .6s cubic-bezier(.2,1.2,.4,1), filter .4s; }
 .person.in { opacity: 1; transform: none; }
+.person.in.dim { opacity: .4; filter: saturate(.4); }
 .person small { font: 400 15px/1.2 var(--round); color: var(--ink-soft); }
 .pic { position: relative; width: 124px; height: 124px; border-radius: 50%; border: var(--mountw) solid var(--mount); box-shadow: var(--shadow); display: grid; place-items: center; color: #fff; font: 500 46px/1 var(--round); background: linear-gradient(135deg, #8A8F99, #4A4E56); transition: transform .3s; }
 .person:hover .pic { transform: translateY(-4px); }

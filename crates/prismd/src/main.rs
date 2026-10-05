@@ -20,6 +20,7 @@ mod open;
 mod facets_api;
 mod files_api;
 mod links_api;
+mod accounts;
 mod media;
 mod proxy;
 mod rescue;
@@ -263,6 +264,8 @@ async fn serve(
         bridge_key,
         access,
         links: std::sync::Arc::new(std::sync::Mutex::new(prism_core::links::Store::load(&state_dir))),
+        accounts: std::sync::Arc::new(host.accounts.clone()),
+        guest_roots: std::sync::Arc::new(host.files.roots.iter().filter(|r| r.guests).map(|r| r.name.clone()).collect()),
         grants: std::sync::Arc::new(prism_core::auth::console::Grants::new()),
         vitals,
         facets,

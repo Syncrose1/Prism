@@ -26,6 +26,26 @@ pub struct HostConfig {
     pub server: ServerConfig,
     pub files: FilesConfig,
     pub terminal: TerminalConfig,
+    pub accounts: AccountsConfig,
+}
+
+/// Who else may sign in: the people of another program on this PC, through a
+/// **provider command** Prism runs with one JSON line on stdin and reads one
+/// line back (`{"op":"people"}`, `{"op":"verify","who","password"}`). Prism
+/// names no program: POLARIS is one provider (`polarisd account provider`).
+///
+/// The provider's primary account signs in as the owner; anyone else as a
+/// **guest**, who can look at files and nothing more, unless named in
+/// [`AccountsConfig::owners`].
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AccountsConfig {
+    /// The command, and its arguments. Empty: no other accounts.
+    pub provider: Vec<String>,
+    /// Environment for it (`POLARIS_HOME`, say).
+    pub env: Vec<(String, String)>,
+    /// Account names (or ids) who sign in as owners besides the primary.
+    pub owners: Vec<String>,
 }
 
 /// Terminal sessions.
@@ -69,6 +89,7 @@ impl Default for HostConfig {
             server: ServerConfig::default(),
             files: FilesConfig::default(),
             terminal: TerminalConfig::default(),
+            accounts: AccountsConfig::default(),
         }
     }
 }
@@ -142,6 +163,10 @@ pub struct FileRoot {
     /// Writes and deletes are refused unless this is explicitly true.
     #[serde(default)]
     pub writable: bool,
+    /// Open to guests (other programs' accounts that aren't owners), to look
+    /// at only. Off unless said: no folder is a guest's by default.
+    #[serde(default)]
+    pub guests: bool,
 }
 
 // ---------------------------------------------------------------------------

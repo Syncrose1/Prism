@@ -39,6 +39,9 @@ pub enum TokenKind {
     Device,
     /// An unlocked session. This is what actually authorises requests.
     Session,
+    /// A guest's session (another program's account that isn't an owner):
+    /// granted like a session, then held by prismd to looking at files.
+    Guest,
 }
 
 impl TokenKind {
@@ -46,6 +49,7 @@ impl TokenKind {
         match self {
             TokenKind::Device => "d",
             TokenKind::Session => "s",
+            TokenKind::Guest => "g",
         }
     }
 
@@ -53,6 +57,7 @@ impl TokenKind {
         match tag {
             "d" => Some(TokenKind::Device),
             "s" => Some(TokenKind::Session),
+            "g" => Some(TokenKind::Guest),
             _ => None,
         }
     }

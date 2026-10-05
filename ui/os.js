@@ -104,9 +104,13 @@ function chevronSweep(mid, done) {
 }
 
 /* ── State, kept on the host ─────────────────────────────────────────── */
-const state = { scene: 'signin', wm: 'float', panes: [], focus: null, pos: {}, host: 'this PC' };
+const state = { scene: 'signin', wm: 'float', panes: [], focus: null, pos: {}, host: 'this PC', role: 'owner', me: null, people: [] };
+const GUEST_APPS = ['files', 'photos', 'videos'];
+const allowed = id => state.role !== 'guest' || GUEST_APPS.includes(id);
 let signedIn = false, saveTimer = null, workspace = {};
 function persist() {
+  // A guest's place isn't the PC's layout: it stays on their own device.
+  if (state.role === 'guest') return;
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     const os = { v: 1, wm: state.wm, panes: state.panes.map(p => ({ id: p.id, args: p.args })), focus: state.focus, pos: state.pos };
@@ -115,6 +119,7 @@ function persist() {
   }, 600);
 }
 async function restore() {
+  if (state.role === 'guest') return null;
   try { workspace = (await api.get('/api/workspace')) || {}; } catch (e) { workspace = {}; }
   const os = workspace.os;
   if (os) { state.wm = os.wm === 'tile' ? 'tile' : 'float'; state.pos = os.pos || {}; return os; }
@@ -136,8 +141,16 @@ async function playSignin() {
   ['#mkBack', '#mkFront', '#ray1', '#ray2', '#ray3'].forEach(s => dash($(s), 0));
   try { const p = await (await fetch('/api/auth/prompt', { credentials: 'same-origin' })).json(); prompt = p.prompt; $('#swap').dataset.canPassword = p.has_password ? '1' : ''; } catch (e) {}
   $('#people').innerHTML = '';
-  const b = el(`<button class="person" type="button"><span class="pic">O<svg class="ring" viewBox="0 0 100 100"><circle cx="50" cy="50" r="46"/></svg></span>Owner<small>${state.host === 'this PC' ? "This PC's owner" : esc(state.host)}</small></button>`);
-  b.addEventListener('click', choose); $('#people').appendChild(b);
+  try { state.people = (await (await fetch('/api/auth/people', { credentials: 'same-origin' })).json()).people || []; } catch (e) { state.people = []; }
+  // Everyone another program on this PC vouches for (POLARIS's people), and
+  // the owner with an authenticator code.
+  for (const p of state.people) {
+    const [c1, c2] = p.colours || ['#8A8F99', '#4A4E56'];
+    const b = el(`<button class="person" type="button"><span class="pic" style="background:linear-gradient(135deg,${esc(c1)},${esc(c2)})">${esc((p.name || '?')[0].toUpperCase())}<svg class="ring" viewBox="0 0 100 100"><circle cx="50" cy="50" r="46"/></svg></span>${esc(p.name)}<small>${p.owner ? 'POLARIS' : 'POLARIS · guest'}</small></button>`);
+    b.addEventListener('click', () => choose(b, p)); $('#people').appendChild(b);
+  }
+  const b = el(`<button class="person" type="button"><span class="pic">O<svg class="ring" viewBox="0 0 100 100"><circle cx="50" cy="50" r="46"/></svg></span>Owner<small>${state.people.length ? 'Authenticator code' : (state.host === 'this PC' ? "This PC's owner" : esc(state.host))}</small></button>`);
+  b.addEventListener('click', () => choose(b, null)); $('#people').appendChild(b);
   gather = 0;
   tween(900, k => gather = k, () => {
     if (my !== seq) return;
@@ -153,6 +166,7 @@ async function playSignin() {
     }), 260);
   });
 }
+let chosen = null;
 function setPrompt(kind) {
   prompt = kind; const pw = $('#pw');
   pw.value = '';
@@ -160,17 +174,22 @@ function setPrompt(kind) {
   pw.inputMode = kind === 'password' ? 'text' : 'numeric';
   pw.autocomplete = kind === 'password' ? 'current-password' : 'one-time-code';
   pw.setAttribute('aria-label', kind === 'password' ? 'Password' : 'Authenticator code');
-  pw.placeholder = kind === 'password' ? 'Password' : '6-digit code';
+  pw.placeholder = kind === 'password' || kind === 'account' ? 'Password' : '6-digit code';
+  if (kind === 'account') { pw.type = 'password'; pw.inputMode = 'text'; pw.autocomplete = 'current-password'; pw.setAttribute('aria-label', 'Password'); }
   const hint = $('#credhint'); hint.classList.remove('bad');
-  hint.textContent = kind === 'password' ? 'This browser has signed in before, so your password is enough.' : 'The code from your authenticator app. It also remembers this browser, so next time a password will do.';
+  hint.textContent = kind === 'account' ? `${chosen.name}'s POLARIS password. ${chosen.owner ? '' : 'A guest can look at files, and nothing more.'}` : kind === 'password' ? 'This browser has signed in before, so your password is enough.' : 'The code from your authenticator app. It also remembers this browser, so next time a password will do.';
   const sw = $('#swap');
-  sw.hidden = !(kind === 'password' || sw.dataset.canPassword);
+  sw.hidden = kind === 'account' || !(kind === 'password' || sw.dataset.canPassword);
   sw.textContent = kind === 'password' ? 'Use a code instead' : 'Use my password';
 }
-function choose() {
-  $$('.person').forEach(p => p.classList.remove('dim'));
-  $('#ask').textContent = `Hello`;
-  setPrompt(prompt);
+let ownerPrompt = 'code';
+function choose(btn, person) {
+  chosen = person;
+  $$('.person').forEach(p => p.classList.toggle('dim', btn && p !== btn));
+  $('#ask').textContent = person ? `Hello, ${person.name}` : 'Hello';
+  if (!person && prompt === 'account') prompt = ownerPrompt;
+  if (person && prompt !== 'account') ownerPrompt = prompt;
+  setPrompt(person ? 'account' : prompt);
   ['#cred', '#credhint', '#swap'].forEach(s => $(s).classList.add('in'));
   setTimeout(() => $('#pw').focus({ preventScroll: true }), 250);
 }
@@ -178,17 +197,18 @@ $('#swap').addEventListener('click', () => { setPrompt(prompt === 'password' ? '
 $('#cred').addEventListener('submit', async e => {
   e.preventDefault();
   const v = $('#pw').value.trim(); if (!v) return;
-  const pic = $('.person .pic'); pic.classList.remove('no'); pic.classList.add('verify');
+  const pic = ($$('.person').find(p => !p.classList.contains('dim')) || $('.person')).querySelector('.pic'); pic.classList.remove('no'); pic.classList.add('verify');
   $('#go').disabled = true;
   try {
-    await call('POST', '/api/auth/login', prompt === 'password' ? { password: v } : { code: v.replace(/\s/g, '') });
+    if (prompt === 'account') await call('POST', '/api/auth/account', { who: chosen.id, password: v });
+    else await call('POST', '/api/auth/login', prompt === 'password' ? { password: v } : { code: v.replace(/\s/g, '') });
     signedIn = true;
     ['#cred', '#credhint', '#swap'].forEach(s => $(s).classList.remove('in'));
     setTimeout(() => { pic.classList.add('pulse'); chevronSweep(() => enter(), null); }, reduce ? 0 : 900);
   } catch (err) {
     pic.classList.remove('verify'); void pic.offsetWidth; pic.classList.add('no');
     const h = $('#credhint'); h.classList.add('bad');
-    h.textContent = err.status === 429 ? `Too many tries. ${err.message}.` : err.body?.error === 'code_already_used' ? 'That code was just used. Wait for the next one.' : prompt === 'password' ? "That password doesn't open this PC." : "That code doesn't open this PC. Check the time on your phone, then try the next one.";
+    h.textContent = err.status === 429 ? `Too many tries. ${err.message}.` : err.status === 503 ? 'POLARIS didn\u2019t answer. Try the owner\u2019s code instead.' : err.body?.error === 'code_already_used' ? 'That code was just used. Wait for the next one.' : prompt === 'account' ? `That password doesn't open ${chosen.name}'s account.` : prompt === 'password' ? "That password doesn't open this PC." : "That code doesn't open this PC. Check the time on your phone, then try the next one.";
     $('#pw').select();
   } finally { $('#go').disabled = false; }
 });
@@ -211,14 +231,18 @@ async function boot() {
 /* ── After sign-in ───────────────────────────────────────────────────── */
 async function enter() {
   seq++; gather = 1; $('#welcome').classList.remove('in');
+  try { const me = await api.get('/api/auth/me'); state.role = me.role || 'owner'; state.me = me.name; } catch (e) { state.role = 'owner'; }
+  const person = state.people.find(p => p.name === state.me);
+  if (person) { const [c1, c2] = person.colours || []; $('#me').style.background = `linear-gradient(135deg,${c1},${c2})`; }
   // The PC's name is behind the session, so it's known only now.
-  try { const s = await api.get('/api/system'); state.host = s.hostname || state.host; $('#host').textContent = state.host; document.title = `${state.host} · PRISM`; $('#me').textContent = state.host[0].toUpperCase(); } catch (e) {}
+  try { const s = await api.get('/api/system'); state.host = s.hostname || state.host; $('#host').textContent = state.host; document.title = `${state.host} · PRISM`; $('#me').textContent = (state.me || state.host)[0].toUpperCase(); } catch (e) {}
+  document.querySelector('a.mlink[href="/classic"]').hidden = state.role === 'guest';
   const os = await restore();
   syncMenu();
   topOn(true);
-  pollVitals(); loadServices();
+  pollVitals(); if (state.role !== 'guest') loadServices();
   if (os && os.panes && os.panes.length) {
-    state.panes = os.panes.filter(p => p && p.id && (APPS[p.id] || p.id.startsWith('web:'))).slice(0, 6);
+    state.panes = os.panes.filter(p => p && p.id && (APPS[p.id] || p.id.startsWith('web:')) && allowed(p.id)).slice(0, 6);
     state.focus = os.focus;
     if (state.panes.length) { showScene('work'); renderPanes(); return; }
   }
@@ -232,7 +256,7 @@ $('#signout').addEventListener('click', async () => {
 /* ── Top bar ─────────────────────────────────────────────────────────── */
 setInterval(() => { $('#clock').textContent = new Date().toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false }); }, 1000);
 $('#clock').textContent = new Date().toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
-$('#device').addEventListener('click', () => openApp('vitals'));
+$('#device').addEventListener('click', () => { if (allowed('vitals')) openApp('vitals'); });
 $('#me').addEventListener('click', () => toggleSheet('#menu'));
 function toggleSheet(s) { const on = !$(s).classList.contains('on'); ['#open', '#menu'].forEach(x => closeSheet(x)); if (on) $(s).classList.add('on'); }
 function closeSheet(s) { $(s).classList.remove('on'); }
@@ -274,7 +298,7 @@ function appOf(id) {
 function goHome() { seq++; gather = 1; showScene('home'); topOn(true); renderHome(); }
 async function renderHome() {
   const h = $('#s-home');
-  const tiles = Object.entries(APPS).map(([id, a], i) => `<button class="tile" data-open="${id}"><span class="m" style="--c:${a.c};--d:${(-i * 0.7) % 4.4}s">${svg(a.icon)}</span>${a.name}</button>`).join('');
+  const tiles = Object.entries(APPS).filter(([id]) => allowed(id)).map(([id, a], i) => `<button class="tile" data-open="${id}"><span class="m" style="--c:${a.c};--d:${(-i * 0.7) % 4.4}s">${svg(a.icon)}</span>${a.name}</button>`).join('');
   h.innerHTML = `
     <div class="jump"><h3>Jump back in</h3><div class="posters" id="posters"><div class="poster" aria-hidden="true"><span class="art">${svg('photo', 'var(--shade)')}</span></div></div></div>
     <div class="tiles">${tiles}</div>
@@ -282,16 +306,17 @@ async function renderHome() {
     <div class="widgets">
       <div class="head2"><h3>Widgets</h3></div>
       <div class="card"><div class="well"><span class="lamp" id="lamp2" data-t="green"></span><b id="wellWord">All's well</b></div><p id="wellLine">Reading this PC…</p><svg class="spark" viewBox="0 0 280 40" preserveAspectRatio="none" aria-hidden="true"><path class="a" id="sparkA"/><path class="l" id="sparkL"/></svg></div>
-      <div class="card" id="lastIn"><span class="k">Last signed in</span><b>…</b></div>
-      <div class="card" id="svcCard"><span class="k">Services</span><b>…</b></div>
+      ${state.role === 'guest' ? `<div class="card"><span class="k">Signed in as a guest</span><b>${esc(state.me || 'Guest')}</b><p>You can look at the files shared on this PC, and play their pictures and films.</p></div>` : `<div class="card" id="lastIn"><span class="k">Last signed in</span><b>…</b></div>
+      <div class="card" id="svcCard"><span class="k">Services</span><b>…</b></div>`}
     </div>`;
   h.querySelectorAll('[data-open]').forEach(b => b.addEventListener('click', () => launch(b, b.dataset.open)));
   renderVitalsWidgets();
-  loadServices().then(renderHosted);
   posters();
+  if (state.role === 'guest') return;
+  loadServices().then(renderHosted);
   try {
     const a = await api.get('/api/access?limit=20');
-    const last = (a.entries || []).find(e => e.kind === 'signedin');
+    const last = (a.entries || []).find(e => e.kind === 'signedin' && !e.who.startsWith('link:'));
     $('#lastIn').innerHTML = last ? `<span class="k">Last signed in</span><b>${esc(last.who === 'admin' ? 'You' : last.who)}${last.how === 'console' ? ', on this PC' : `, from ${esc(last.from)}`}</b><p>${ago(last.unix)} · ${esc({ code: 'with a code', password: 'with your password', console: 'from this PC', bridge: 'through POLARIS' }[last.how] || last.how)}</p>` : `<span class="k">Last signed in</span><b>Nobody yet</b><p>Every sign-in is recorded here, sealed.</p>`;
   } catch (e) {}
 }
@@ -357,7 +382,7 @@ function launch(tile, id) {
 const MAXN = () => state.wm === 'float' ? 6 : 4;
 let zTop = 10;
 function openApp(id, args, alone) {
-  const a = appOf(id); if (!a) return;
+  const a = appOf(id); if (!a || !allowed(id)) return;
   const existing = state.panes.find(p => p.id === id);
   if (existing) { if (args) { existing.args = args; const pe = paneEl(id); if (pe) rebuild(pe, existing); } state.focus = id; }
   else if (alone || state.scene !== 'work') { state.panes = [{ id, args }]; state.focus = id; }
@@ -484,7 +509,7 @@ function openSheet() {
   const row = $('#openRow'); row.innerHTML = '';
   $('#openTitle').textContent = state.scene === 'work' ? 'Open beside' : 'Open';
   $('#openHint').textContent = state.wm === 'float' ? 'Up to six windows. One more replaces the one you are in.' : 'Up to four Apps share the screen. One more replaces the one you are in.';
-  const all = [...Object.keys(APPS), ...facets.filter(f => f.expose && (f.state === 'running' || f.state === 'foreign')).map(f => 'web:' + f.id)];
+  const all = [...Object.keys(APPS).filter(allowed), ...(state.role === 'guest' ? [] : facets).filter(f => f.expose && (f.state === 'running' || f.state === 'foreign')).map(f => 'web:' + f.id)];
   all.forEach(id => {
     const a = appOf(id);
     const b = el(`<button><span class="m" style="--c:${a.c}">${svg(a.icon)}</span>${esc(a.name)}</button>`);
@@ -512,14 +537,14 @@ function filesApp(args, body, pane) {
     try { localStorage.setItem('prism.lastFolder', JSON.stringify(cur)); } catch (e) {}
     places.querySelectorAll('.place').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.root === cur.root)));
     const parts = cur.path ? cur.path.split('/') : [];
-    const writable = roots.find(r => r.name === cur.root)?.writable;
+    const writable = state.role !== 'guest' && roots.find(r => r.name === cur.root)?.writable;
     crumbs.innerHTML = '';
     const rb = el(`<button>${esc(cur.root)}</button>`); rb.addEventListener('click', () => { cur.path = ''; load(); }); crumbs.appendChild(rb);
     parts.forEach((p, i) => { crumbs.appendChild(el('<span>›</span>')); const b = el(`<button>${esc(p)}</button>`); b.addEventListener('click', () => { cur.path = parts.slice(0, i + 1).join('/'); load(); }); crumbs.appendChild(b); });
     const sb = el(`<button class="btn">${svg('link', '#fff', 2.4)}Share</button>`);
     sb.addEventListener('click', () => openShare(cur.root, cur.path, !!writable));
     const shareWrap = el(`<span class="acts"></span>`); shareWrap.appendChild(sb);
-    if (!writable) crumbs.appendChild(shareWrap);
+    if (!writable && state.role !== 'guest') crumbs.appendChild(shareWrap);
     if (writable) {
       const acts = el(`<span class="acts"><button class="btn q" data-a="dir">${svg('newdir', 'currentColor', 2.2)}Folder</button><label class="btn">${svg('up', '#fff', 2.4)}Upload<input type="file" multiple hidden></label></span>`);
       acts.querySelector('[data-a="dir"]').addEventListener('click', async () => {
@@ -541,7 +566,7 @@ function filesApp(args, body, pane) {
       const [ic, c] = KIND_ICON[x.kind] || KIND_ICON.other;
       const full = cur.path ? `${cur.path}/${x.name}` : x.name;
       const thumb = x.kind === 'image' || x.kind === 'video';
-      const b = el(`<button class="thing"><span class="th">${svg(ic, c, 2.2)}${thumb ? `<img loading="lazy" alt="" src="/api/files/thumb?${q({ root: cur.root, path: full })}" onerror="this.remove()">` : ''}${x.is_dir ? `<span class="fshare" role="button" aria-label="Share ${esc(x.name)}" title="Share this folder">${svg('link', '#fff', 2.4)}</span>` : ''}</span><b title="${esc(x.name)}">${esc(x.name)}</b><small>${x.is_dir ? 'Folder' : bytes(x.size)}${x.modified ? ' · ' + ago(x.modified) : ''}</small></button>`);
+      const b = el(`<button class="thing"><span class="th">${svg(ic, c, 2.2)}${thumb ? `<img loading="lazy" alt="" src="/api/files/thumb?${q({ root: cur.root, path: full })}" onerror="this.remove()">` : ''}${x.is_dir && state.role !== 'guest' ? `<span class="fshare" role="button" aria-label="Share ${esc(x.name)}" title="Share this folder">${svg('link', '#fff', 2.4)}</span>` : ''}</span><b title="${esc(x.name)}">${esc(x.name)}</b><small>${x.is_dir ? 'Folder' : bytes(x.size)}${x.modified ? ' · ' + ago(x.modified) : ''}</small></button>`);
       const fs = b.querySelector('.fshare'); if (fs) fs.addEventListener('click', ev => { ev.stopPropagation(); openShare(cur.root, full, !!writable); });
       b.addEventListener('click', () => {
         if (x.is_dir) { cur.path = full; load(); }

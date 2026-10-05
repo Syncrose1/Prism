@@ -125,6 +125,10 @@ pub struct AppState {
     pub access: Arc<prism_core::access::AccessLog>,
     /// Share links (`prism_core::links`), kept in `$STATE/links.json`.
     pub links: Arc<std::sync::Mutex<prism_core::links::Store>>,
+    /// Other programs' accounts (`[accounts]` in prism.toml).
+    pub accounts: Arc<prism_core::config::AccountsConfig>,
+    /// The file roots open to guests (`guests = true`).
+    pub guest_roots: Arc<std::collections::HashSet<String>>,
     /// The port Prism itself is serving on, so the discovery sweep does not
     /// offer the operator their own desktop as an app to add to it.
     pub port: u16,
@@ -166,6 +170,7 @@ pub fn router(state: AppState) -> Router {
         .merge(crate::files_api::routes())
         .merge(crate::facets_api::routes())
         .merge(crate::links_api::routes())
+        .merge(crate::accounts::routes())
         .merge(crate::workspace::routes())
         .merge(crate::proxy::routes())
         .route("/", get(crate::ui::index))
@@ -509,7 +514,7 @@ async fn login(
     }
 }
 
-fn err_json(status: StatusCode, error: &'static str, detail: impl Into<String>) -> Response {
+pub(crate) fn err_json(status: StatusCode, error: &'static str, detail: impl Into<String>) -> Response {
     (
         status,
         Json(ErrorBody {
@@ -634,6 +639,16 @@ async fn audit(
         log(Kind::Refused, "unknown", "bridge", format!("{method} {path}: the bridge key, from off this machine"));
         return err_json(StatusCode::FORBIDDEN, "bridge_is_local", "the bridge key is accepted from this machine only");
     }
+    // A guest's session reaches only what a guest may: looking at files.
+    if !bridged && state.auth.session_kind(session_token(&headers).as_deref(), totp::now_unix()) == Some(prism_core::auth::session::TokenKind::Guest)
+        && !path.starts_with("/l/") && path != "/rescue" {
+        // And only in the folders opened to guests.
+        let root = req.uri().query().unwrap_or("").split('&').find_map(|p| p.strip_prefix("root=")).map(|r| r.replace("%20", " "));
+        let in_guest_root = path == "/api/files/roots" || !path.starts_with("/api/files/") || root.is_some_and(|r| state.guest_roots.contains(&r));
+        if !crate::accounts::guest_may(&method, &path) || !in_guest_root {
+            return err_json(StatusCode::FORBIDDEN, "guest", "a guest can look at the folders opened to guests, and nothing more");
+        }
+    }
     // A sign-in's body says how (a code or a password); it is small, so it
     // is read here and handed on.
     let (req, how) = if path == "/api/auth/login" {
@@ -652,6 +667,8 @@ async fn audit(
         ("/auth/console", _) => log(if good { Kind::SignedIn } else { Kind::Refused }, if good { "admin" } else { "unknown" }, "console", "signed in from this machine".into()),
         ("/api/auth/logout", _) => log(Kind::SignedOut, "admin", "session", "signed out".into()),
         ("/api/auth/console", _) => {}
+        // Signs itself in the log, with the account's own name (accounts.rs).
+        ("/api/auth/account", _) => {}
         (p, m) if *m != axum::http::Method::GET && *m != axum::http::Method::HEAD && p.starts_with("/api/") => {
             let who = if ok_bridge { "polaris" } else { "admin" };
             let how = if ok_bridge { "bridge" } else { "session" };

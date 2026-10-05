@@ -589,6 +589,17 @@ good copy; facets apply at once. Every sign-in, refusal and change, with its
 peer, goes to `$STATE/access.jsonl`, a SHA-256 chain checked at start and
 served by `GET /api/access?who=`.
 
+**Other accounts, and guests** (5 Oct 2026). `[accounts] provider` in
+prism.toml names a command Prism runs with one JSON line (`{"op":"people"}`,
+`{"op":"verify","who","password"}`) and reads one back; Prism names no
+program (POLARIS's is `polarisd account provider`). The provider's primary
+account signs in as the owner (an ordinary session); anyone else as a
+**guest** (a `g` session), held by the audit layer to looking at files, and
+only in roots marked `guests = true`. Wrong passwords share the code's
+lockout. **Share links** (`prism_core::links`, `/l/<token>`): one folder,
+time-limited, optionally one-time, exactly scoped (the folder becomes the
+link's own root), plain HTML and forms; see the module.
+
 - REST for actions and configuration
 - WebSocket for the 1 Hz metrics stream
 - SSE per-facet log streaming

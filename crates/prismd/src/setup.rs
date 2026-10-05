@@ -43,6 +43,7 @@ fn detect_roots() -> Vec<FileRoot> {
         name: "home".into(),
         path: h.clone(),
         writable: false,
+            guests: false,
     }];
 
     // Generated-image output, under whichever layout is installed.
@@ -61,6 +62,7 @@ fn detect_roots() -> Vec<FileRoot> {
                 path: path.clone(),
                 // The point of reaching these remotely is to sort and delete.
                 writable: true,
+            guests: false,
             });
         }
     }
@@ -74,6 +76,7 @@ fn detect_roots() -> Vec<FileRoot> {
                 name: name.into(),
                 path,
                 writable: true,
+            guests: false,
             });
         }
     }
@@ -250,6 +253,7 @@ pub fn detect() -> Detected {
                 roots: detect_roots(),
             },
             terminal: TerminalConfig::default(),
+            accounts: Default::default(),
         },
         profile: Profile {
             name: hostname,
