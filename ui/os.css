@@ -562,3 +562,9 @@ button.pill { cursor: pointer; }
 .sidebody { position: relative; }
 .solisb[aria-pressed="true"] { box-shadow: var(--shadow), inset 0 0 0 2px var(--live); }
 @media (max-width: 640px) { .side { top: 104px; } }
+
+/* A POLARIS App's tile: its initials, its star */
+.tile .m .mono { font: 600 34px/1 var(--round); color: #fff; letter-spacing: .02em; }
+.shelf .tiles .m .mono { font-size: 28px; }
+.shelf .tiles { grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); }
+.talk .note .btn { justify-self: center; margin-top: 6px; }

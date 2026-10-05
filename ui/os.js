@@ -160,10 +160,14 @@ function tween(ms, f, done) { const t0 = performance.now(); (function s(n) { con
 // wiped away as it passes, and what's behind it (Home, or the Apps left
 // open) is already there. Both scenes are drawn during the sweep, each
 // clipped to its side of the band; the stars carry on underneath.
+let sweepOn = false;
 async function chevronSweep(mid, done) {
   const veil = $('#veil'), vg = veil.getContext('2d'), si = $('#s-signin'), top = $('#top');
   if (reduce) { await mid(); done && done(); return; }
+  if (sweepOn) return; sweepOn = true;
   si.classList.add('leaving'); document.body.classList.add('sweeping'); top.classList.add('hold');
+  // Whatever enter() shows stays hidden until the chevron reaches it.
+  $$('.scene').forEach(x => { if (x !== si) x.style.clipPath = 'inset(100% 0 0 0)'; });
   await mid();
   const W = innerWidth, H = innerHeight, A = H * .45, slope = A / (W * .6);
   const css = getComputedStyle(document.documentElement); const c1 = css.getPropertyValue('--veil-1').trim(), c2 = css.getPropertyValue('--veil-2').trim();
@@ -180,8 +184,8 @@ async function chevronSweep(mid, done) {
     if (edge(e3) < 40) top.classList.remove('hold');
   }, () => {
     vg.clearRect(0, 0, W, H);
-    si.classList.remove('leaving'); si.style.clipPath = ''; if (to) to.style.clipPath = '';
-    document.body.classList.remove('sweeping'); top.classList.remove('hold');
+    si.classList.remove('leaving'); $$('.scene').forEach(x => x.style.clipPath = '');
+    document.body.classList.remove('sweeping'); top.classList.remove('hold'); sweepOn = false;
     done && done();
   });
 }
@@ -412,6 +416,7 @@ async function renderHome() {
   h.innerHTML = `
     <div class="jump"><h3>Jump back in</h3><div class="posters" id="posters"><div class="poster" aria-hidden="true"><span class="art">${svg('photo', 'var(--shade)')}</span></div></div></div>
     <div class="tiles">${tiles}</div>
+    <div class="shelf" id="polarisShelf" hidden><div class="head2"><h3>POLARIS</h3><span>its Apps, live from this PC, in any browser</span></div><div class="tiles" id="polarisApps"></div></div>
     <div class="shelf" id="hostedShelf" hidden><div class="head2"><h3>Hosted on this PC</h3><span>opened through PRISM, no ports to remember</span></div><div class="tiles" id="hosted"></div></div>
     <div class="widgets">
       <div class="head2"><h3>Widgets</h3></div>
@@ -472,20 +477,32 @@ function posters() {
   if (!box.children.length) box.appendChild(el(`<div class="card"><b>Nothing to carry on yet</b><p>What you open, pictures, films and folders, waits here for next time.</p></div>`));
 }
 async function loadServices() { try { facets = await api.get('/api/facets'); } catch (e) {} return facets; }
+// A POLARIS App's colour, steady for its name (its own icon lives in POLARIS).
+const POL_HUES = ['#7C5CE0', '#2E71C8', '#33BFE2', '#2E9E62', '#E5A23A', '#C0485C', '#5A5F68', '#D98A12'];
+const polColour = name => POL_HUES[[...name].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7) % POL_HUES.length];
+const titleOf = f => f.expose?.title || f.name;
 function renderHosted() {
   const shelf = $('#hostedShelf'), box = $('#hosted'); if (!box) return;
+  const pshelf = $('#polarisShelf'), pbox = $('#polarisApps');
   const exposed = facets.filter(f => f.expose);
-  shelf.hidden = !exposed.length;
-  box.innerHTML = '';
-  exposed.forEach((f, i) => {
-    const pol = /face-stream/.test(f.command || ''), running = f.state === 'running' || f.state === 'foreign';
-    const b = el(`<button class="tile" data-facet="${esc(f.id)}"><span class="m" style="--c:${pol ? '#7C5CE0' : running ? '#2E9E62' : '#9A978F'};--d:${(3 + i * 0.35).toFixed(2)}s">${svg(pol ? 'play' : 'globe')}${pol ? `<span class="pstar">${svg('star')}</span>` : ''}</span>${esc(f.expose.title || f.name)}<small>${running ? (pol ? 'POLARIS, streamed' : 'running') : 'stopped'}</small></button>`);
+  // POLARIS's own Apps get their shelf; everything else hosted here, its own.
+  const isPol = f => /face-stream/.test(f.command || '');
+  const pol = exposed.filter(isPol).sort((a, b) => titleOf(a).localeCompare(titleOf(b)));
+  const other = exposed.filter(f => !isPol(f));
+  shelf.hidden = !other.length; if (pshelf) pshelf.hidden = !pol.length;
+  box.innerHTML = ''; if (pbox) pbox.innerHTML = '';
+  const tile = (f, i, into) => {
+    const p = isPol(f), running = f.state === 'running' || f.state === 'foreign';
+    const face = p ? `<span class="mono">${esc(titleOf(f).split(/\s+/).map(w => w[0]).join('').slice(0, 2))}</span><span class="pstar">${svg('star')}</span>` : svg('globe');
+    const b = el(`<button class="tile" data-facet="${esc(f.id)}"><span class="m" style="--c:${p ? polColour(titleOf(f)) : running ? '#2E9E62' : '#9A978F'};--d:${(3 + i * 0.35).toFixed(2)}s">${face}</span>${esc(titleOf(f))}<small>${running ? (p ? 'open now' : 'running') : p ? 'opens live' : 'stopped'}</small></button>`);
     b.addEventListener('click', () => openHosted(f.id));
     b.addEventListener('contextmenu', ev => { ev.preventDefault(); serviceMenu(f, ev.clientX, ev.clientY); });
-    box.appendChild(b);
-  });
+    into.appendChild(b);
+  };
+  if (pbox) pol.forEach((f, i) => tile(f, i, pbox));
+  other.forEach((f, i) => tile(f, i, box));
   const run = facets.filter(f => f.state === 'running').length;
-  const card = $('#svcCard'); if (card) card.innerHTML = `<span class="k">Services</span><b>${run} running</b><p>${esc(facets.filter(f => f.state === 'running').map(f => f.name).join(', ') || 'Nothing PRISM started is running.')}</p>`;
+  const card = $('#svcCard'); if (card) card.innerHTML = `<span class="k">Services</span><b>${run} running</b><p>${esc(facets.filter(f => f.state === 'running').map(titleOf).join(', ') || 'Nothing PRISM started is running.')}</p>`;
 }
 
 /* App launch: the tile glides, its name appears, the App fades in. */
@@ -1325,7 +1342,7 @@ function servicesApp(args, body) {
       const pol = /face-stream/.test(f.command || '');
       const tag = { running: ['run', 'Running'], foreign: ['out', 'Not PRISM’s'], stopped: ['off', 'Stopped'], failed: ['off', 'Failed'] }[f.state] || ['off', f.state];
       const lim = [f.limits?.memory_max && `at most ${f.limits.memory_max}`, f.limits?.swap_max != null && (f.limits.swap_max === '0' ? 'no swap' : `up to ${f.limits.swap_max} in swap`)].filter(Boolean).join(', ');
-      const r = el(`<div class="row"><span class="ic" style="--c:${pol ? '#7C5CE0' : '#2E9E62'}">${esc((f.name || f.id)[0].toUpperCase())}</span><b>${esc(f.name)}${pol ? ' · POLARIS' : ''}</b><span class="meta">${f.state === 'running' && f.memory_mib != null ? mib(f.memory_mib) + ' now' : ''}${lim ? (f.state === 'running' ? ' · ' : '') + lim : ''}${f.state === 'foreign' ? 'Started outside PRISM, so PRISM only asks it, never stops it' : ''}${!f.available && f.unavailable_because ? esc(f.unavailable_because) : ''}</span><span class="state"><span class="tag ${tag[0]}">${tag[1]}</span></span></div>`);
+      const r = el(`<div class="row"><span class="ic" style="--c:${pol ? '#7C5CE0' : '#2E9E62'}">${esc((f.name || f.id)[0].toUpperCase())}</span><b>${esc(titleOf(f))}${pol ? ' · POLARIS' : ''}</b><span class="meta">${f.state === 'running' && f.memory_mib != null ? mib(f.memory_mib) + ' now' : ''}${lim ? (f.state === 'running' ? ' · ' : '') + lim : ''}${f.state === 'foreign' ? 'Started outside PRISM, so PRISM only asks it, never stops it' : ''}${!f.available && f.unavailable_because ? esc(f.unavailable_because) : ''}</span><span class="state"><span class="tag ${tag[0]}">${tag[1]}</span></span></div>`);
       const st = r.querySelector('.state');
       r.addEventListener('contextmenu', ev => { ev.preventDefault(); serviceMenu(f, ev.clientX, ev.clientY, draw); });
       if (f.expose && (f.state === 'running' || f.state === 'foreign')) { const o = el(`<button class="btn">Open</button>`); o.addEventListener('click', () => openHosted(f.id)); st.appendChild(o); }
@@ -1489,7 +1506,19 @@ function solisApp(args, body) {
     let here = null; try { here = await api.get('/api/solis'); } catch (e) {}
     if (!here?.up) {
       talk.innerHTML = '';
-      note(`<b>Solis isn't here yet</b><p>Solis lives in POLARIS on ${esc(state.host)}. Start POLARIS there, and in its Settings › Clients, turn on the gateway. This page connects by itself once it's up.</p>`);
+      // POLARIS's runtime, when POLARIS made it one of PRISM's services
+      // (its streamed Apps start it too): one press wakes Solis.
+      await loadServices();
+      const rt = facets.find(f => f.id === 'polaris-runtime');
+      if (rt && rt.state !== 'running') {
+        const n = note(`<b>Solis is asleep</b><p>POLARIS isn't running on ${esc(state.host)}. PRISM can start it here, without a window, so Solis can answer.</p><button class="btn wake">Wake Solis</button>`);
+        n.querySelector('.wake').addEventListener('click', async ev => {
+          ev.target.disabled = true; ev.target.textContent = 'Waking…';
+          try { await api.post('/api/facets/polaris-runtime/start'); } catch (e) { toast(e.message, true); ev.target.disabled = false; ev.target.textContent = 'Wake Solis'; }
+        });
+      } else {
+        note(`<b>Solis isn't here yet</b><p>Solis lives in POLARIS on ${esc(state.host)}. ${rt ? 'POLARIS is starting.' : 'Start POLARIS there, and in its Settings › Clients, turn on the gateway.'} This page connects by itself once it's up.</p>`);
+      }
       setTimeout(connect, 5000); return;
     }
     ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/solis/realtime`);
