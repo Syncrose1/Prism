@@ -12,3 +12,4 @@ network access beyond the tailnet, and Prism has no npm toolchain.
 The font is subset to Latin, box drawing, Powerline and the Nerd Font
 private-use blocks — 2.7 MB down to 789 KB — so terminal glyphs render on a
 device that has no such font installed.
+| `mplus-rounded-{regular,medium,bold}.woff2` | [M PLUS Rounded 1c](https://github.com/coz-m/MPLUS_FONTS), the face POLARIS draws in, subset to Latin and common punctuation (~13 KB each) | SIL OFL 1.1 |

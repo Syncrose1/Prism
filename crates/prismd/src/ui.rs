@@ -18,7 +18,13 @@ use rust_embed::Embed;
 struct Assets;
 
 /// The shell, at `/`.
+/// PRISM OS (`ui/os.html`): POLARIS's grammar, Apps that float or tile.
 pub async fn index() -> Response {
+    serve("os.html")
+}
+
+/// The first shell, kept while the new one grows to cover all it does.
+pub async fn classic() -> Response {
     serve("shell.html")
 }
 
@@ -77,6 +83,16 @@ mod tests {
         assert!(js.data.len() > 100_000, "that is not the real xterm.js");
         assert!(Assets::get("vendor/xterm.css").is_some());
         assert!(Assets::get("vendor/xterm-addon-fit.js").is_some());
+    }
+
+    #[test]
+    fn prism_os_and_its_type_are_embedded() {
+        // Served offline over the overlay: no CDN, so the face POLARIS draws
+        // in travels inside the binary.
+        assert!(Assets::get("os.html").is_some() && Assets::get("os.js").is_some() && Assets::get("os.css").is_some());
+        for w in ["regular", "medium", "bold"] {
+            assert!(Assets::get(&format!("vendor/mplus-rounded-{w}.woff2")).is_some(), "{w}");
+        }
     }
 
     #[test]

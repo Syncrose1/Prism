@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>PRISM</title>
+<link rel="stylesheet" href="/ui/os.css">
+<link rel="stylesheet" href="/ui/vendor/xterm.css">
+<script>
+  // The theme before anything paints: Pearl, Ash, or as this device's system says.
+  (function () {
+    var t = 'auto';
+    try { t = localStorage.getItem('prism.theme') || 'auto'; } catch (e) {}
+    var dark = window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches;
+    document.documentElement.dataset.theme = t === 'auto' ? (dark ? 'ash' : 'pearl') : t;
+  })();
+</script>
+</head>
+<body>
+<canvas id="sky" aria-hidden="true"></canvas>
+
+<!-- Sign-in: POLARIS's sequence. -->
+<section class="scene on" id="s-signin" aria-label="Sign in">
+  <div class="lockup" id="lockup">
+    <svg viewBox="0 0 100 100" aria-hidden="true">
+      <path class="mk-back" id="mkBack" d="M18 86 L50 64 L82 86"/>
+      <path class="mk-front" id="mkFront" d="M18 68 L50 46 L82 68"/>
+      <path class="mk-ray" id="ray1" stroke="#33BFE2" d="M50 33 L50 6"/>
+      <path class="mk-ray" id="ray2" stroke="#E5A23A" d="M50 33 L72 12"/>
+      <path class="mk-ray" id="ray3" stroke="#7C5CE0" d="M50 33 L28 12"/>
+    </svg>
+    <div class="word" id="word"><span>P</span><span>R</span><span>I</span><span>S</span><span>M</span></div>
+  </div>
+  <div class="who">
+    <h2 id="ask">Who's here?</h2>
+    <div class="people" id="people"></div>
+    <form class="cred" id="cred">
+      <input id="pw" autocomplete="one-time-code" inputmode="numeric" aria-label="Authenticator code">
+      <button class="go" id="go" aria-label="Sign in"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8h9M8.5 4.5 12 8l-3.5 3.5" stroke="#fff" stroke-width="2.4" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+    </form>
+    <p class="credhint" id="credhint"></p>
+    <button class="swap" id="swap" type="button"></button>
+  </div>
+  <div class="welcome" id="welcome">Welcome back</div>
+</section>
+
+<!-- The top bar: this PC, Solis (with POLARIS), the workspace, the time, you. -->
+<header class="top" id="top">
+  <div class="pill device" id="device"><span class="lamp" id="lamp" data-t="green"></span><span id="host">this PC</span><small id="via"></small></div>
+  <nav class="strip" id="strip" aria-label="Open Apps"></nav>
+  <div class="pill time num" id="clock"></div>
+  <button class="pill me" id="me" aria-label="You">P</button>
+</header>
+
+<div class="sheet" id="open" role="dialog" aria-label="Open an App"><h3 id="openTitle">Open beside</h3><div class="apps4" id="openRow"></div><p id="openHint"></p></div>
+<div class="sheet" id="menu" role="dialog" aria-label="You">
+  <div class="mrow"><span>Look</span><div class="seg" id="themeSeg"><button data-v="pearl">Pearl</button><button data-v="ash">Ash</button><button data-v="auto">Auto</button></div></div>
+  <div class="mrow"><span>Windows</span><div class="seg" id="wmSeg"><button data-v="float">Floating</button><button data-v="tile">Tiled</button></div></div>
+  <a class="mlink" href="/rescue">Rescue page<small style="margin-left:auto;color:var(--on-mount-soft);font-weight:400">works with no scripts</small></a>
+  <a class="mlink" href="/classic">The old PRISM</a>
+  <button class="mlink bad" id="signout">Sign out</button>
+</div>
+
+<main class="scene home" id="s-home" aria-label="Home"></main>
+<main class="scene work" id="s-work" aria-label="Apps"><div class="panes float" id="panes" data-n="1"></div></main>
+
+<canvas id="veil" aria-hidden="true"></canvas>
+<div class="toasts" id="toasts" aria-live="polite"></div>
+
+<script src="/ui/vendor/xterm.js"></script>
+<script src="/ui/vendor/xterm-addon-fit.js"></script>
+<script src="/ui/os.js"></script>
+</body>
+</html>

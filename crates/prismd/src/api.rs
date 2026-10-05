@@ -166,6 +166,7 @@ pub fn router(state: AppState) -> Router {
         .merge(crate::workspace::routes())
         .merge(crate::proxy::routes())
         .route("/", get(crate::ui::index))
+        .route("/classic", get(crate::ui::classic))
         .route("/ui/{*path}", get(crate::ui::asset))
         .layer(axum::middleware::from_fn_with_state(audited, audit))
         .with_state(state)
