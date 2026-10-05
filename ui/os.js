@@ -35,6 +35,22 @@ const ICONS = {
   tiles: '<rect x="3" y="4" width="8" height="16" rx="2"/><rect x="13" y="4" width="8" height="7" rx="2"/><rect x="13" y="13" width="8" height="7" rx="2"/>',
   windows: '<rect x="3" y="7" width="12" height="11" rx="2"/><rect x="9" y="3" width="12" height="11" rx="2"/>',
   link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
+  search: '<circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/>',
+  pin: '<path d="M9 4h6l-1 6 3 3H7l3-3z"/><path d="M12 13v7"/>',
+  pen: '<path d="M4 20l1-4L16 5l3 3L8 19z"/><path d="M14 7l3 3"/>',
+  trash: '<path d="M5 7h14M10 7V4h4v3M7 7l1 13h8l1-13"/>',
+  down: '<path d="M12 4v11M7 10l5 5 5-5M5 19h14"/>',
+  down2: '<path d="M7 10l5 5 5-5"/>',
+  stop: '<rect x="6" y="6" width="12" height="12" rx="2"/>',
+  again: '<path d="M20 12a8 8 0 1 1-2.3-5.7M20 4v5h-5"/>',
+  loop: '<path d="M4 11V9a3 3 0 0 1 3-3h12l-3-3M20 13v2a3 3 0 0 1-3 3H5l3 3"/>',
+  vol: '<path d="M4 9h4l5-4v14l-5-4H4z"/><path d="M16 9a4 4 0 0 1 0 6M18.5 6.5a8 8 0 0 1 0 11"/>',
+  mute: '<path d="M4 9h4l5-4v14l-5-4H4z"/><path d="M16 9l5 6M21 9l-5 6"/>',
+  pause: '<path d="M8 5v14M16 5v14"/>',
+  full: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
+  pip: '<rect x="3" y="5" width="18" height="14" rx="2"/><rect x="12" y="11" width="7" height="6" rx="1"/>',
+  chat: '<path d="M4 6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H10l-5 4v-4H6a2 2 0 0 1-2-2z"/>',
+  send: '<path d="M4 12l16-8-6 16-2-6z"/>',
 };
 const svg = (n, c = '#fff', w = 2.6) => `<svg viewBox="0 0 24 24" fill="none" stroke="${c}" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[n]}</svg>`;
 
@@ -73,22 +89,35 @@ const clock = unix => new Date(unix * 1000).toLocaleTimeString(undefined, { hour
 
 /* ── The sky, and the chevron veil ───────────────────────────────────── */
 const sky = $('#sky'), sg = sky.getContext('2d');
-const dpr = () => Math.min(2, devicePixelRatio || 1);
+// The sky is drawn at one pixel per CSS pixel and thirty frames a second:
+// soft stars need neither more, and the PC (often a remote one, on a
+// laptop's battery) gets the rest. It stops when hidden behind windows.
+const dpr = () => 1;
 const stars = Array.from({ length: 34 }, () => ({ x: Math.random(), y: Math.random(), r: 2 + Math.random() * 5, s: .000004 + Math.random() * .00001, tw: Math.random() * 6.28 }));
-let gather = 0, skyOn = true;
+let gather = 0, skyOn = true, skyColour = '#33BFE2', skyRaf = 0, skyLast = 0;
 function size(c) { c.width = innerWidth * dpr(); c.height = innerHeight * dpr(); c.getContext('2d').setTransform(dpr(), 0, 0, dpr(), 0, 0); }
 addEventListener('resize', () => { size(sky); size($('#veil')); });
 size(sky); size($('#veil'));
+const readSky = () => { skyColour = getComputedStyle(document.documentElement).getPropertyValue('--sky').trim() || '#33BFE2'; };
+readSky();
+new MutationObserver(readSky).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'class', 'style'] });
+matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', readSky);
 function starPath(g, x, y, r) { const b = r * .34; g.beginPath(); g.moveTo(x, y - r); g.quadraticCurveTo(x + b, y - b, x + r, y); g.quadraticCurveTo(x + b, y + b, x, y + r); g.quadraticCurveTo(x - b, y + b, x - r, y); g.quadraticCurveTo(x - b, y - b, x, y - r); g.closePath(); }
-(function drawSky(t) {
-  sg.clearRect(0, 0, innerWidth, innerHeight);
-  if (skyOn) {
-    sg.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--sky').trim() || '#33BFE2';
+function drawSky(t) {
+  skyRaf = 0;
+  if (!skyOn || document.hidden) { sg.clearRect(0, 0, innerWidth, innerHeight); return; }
+  if (t - skyLast >= 32) {
+    skyLast = t;
+    sg.clearRect(0, 0, innerWidth, innerHeight);
+    sg.fillStyle = skyColour;
     for (const s of stars) { sg.globalAlpha = .45 * (.6 + .4 * Math.sin(t / 1400 + s.tw)) * Math.min(1, gather); starPath(sg, ((s.x + t * s.s) % 1) * innerWidth, s.y * innerHeight, s.r); sg.fill(); }
     sg.globalAlpha = 1;
   }
-  if (!reduce) requestAnimationFrame(drawSky);
-})(0);
+  if (!reduce) skyRaf = requestAnimationFrame(drawSky);
+}
+const wakeSky = () => { if (!skyRaf) skyRaf = requestAnimationFrame(drawSky); };
+document.addEventListener('visibilitychange', wakeSky);
+wakeSky();
 function tween(ms, f, done) { const t0 = performance.now(); (function s(n) { const k = Math.min(1, (n - t0) / (reduce ? 1 : ms)); f(k); k < 1 ? requestAnimationFrame(s) : done && done(); })(t0); }
 function chevronSweep(mid, done) {
   const veil = $('#veil'), vg = veil.getContext('2d'), W = innerWidth, H = innerHeight;
@@ -104,7 +133,7 @@ function chevronSweep(mid, done) {
 }
 
 /* ── State, kept on the host ─────────────────────────────────────────── */
-const state = { scene: 'signin', wm: 'float', panes: [], focus: null, pos: {}, host: 'this PC', role: 'owner', me: null, people: [] };
+const state = { scene: 'signin', wm: 'float', panes: [], focus: null, pos: {}, host: 'this PC', role: 'owner', me: null, people: [], pins: [], recent: [] };
 const GUEST_APPS = ['files', 'photos', 'videos'];
 const allowed = id => state.role !== 'guest' || GUEST_APPS.includes(id);
 let signedIn = false, saveTimer = null, workspace = {};
@@ -113,16 +142,19 @@ function persist() {
   if (state.role === 'guest') return;
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
-    const os = { v: 1, wm: state.wm, panes: state.panes.map(p => ({ id: p.id, args: p.args })), focus: state.focus, pos: state.pos };
+    const os = { v: 1, wm: state.wm, panes: state.panes.map(p => ({ id: p.id, args: p.args })), focus: state.focus, pos: state.pos, split: state.split, pins: state.pins, recent: state.recent };
     workspace = { ...(workspace || {}), os };
     api.put('/api/workspace', workspace).catch(() => {});
   }, 600);
 }
 async function restore() {
-  if (state.role === 'guest') return null;
+  if (state.role === 'guest') {
+    try { state.pins = JSON.parse(localStorage.getItem('prism.pins') || '[]'); state.recent = JSON.parse(localStorage.getItem('prism.recent') || '[]'); } catch (e) {}
+    return null;
+  }
   try { workspace = (await api.get('/api/workspace')) || {}; } catch (e) { workspace = {}; }
   const os = workspace.os;
-  if (os) { state.wm = os.wm === 'tile' ? 'tile' : 'float'; state.pos = os.pos || {}; return os; }
+  if (os) { state.wm = os.wm === 'tile' ? 'tile' : 'float'; state.pos = os.pos || {}; if (os.split) state.split = os.split; state.pins = os.pins || []; state.recent = os.recent || []; return os; }
   return null;
 }
 
@@ -130,7 +162,7 @@ async function restore() {
 const lockup = $('#lockup');
 let seq = 0, prompt = 'code';
 function dash(e, k) { const L = e.getTotalLength(); e.style.strokeDasharray = L; e.style.strokeDashoffset = L * (1 - k); }
-function showScene(id) { $$('.scene').forEach(s => s.classList.toggle('on', s.id === 's-' + id)); state.scene = id; skyOn = id !== 'work'; renderStrip(); }
+function showScene(id) { $$('.scene').forEach(s => s.classList.toggle('on', s.id === 's-' + id)); state.scene = id; skyOn = id !== 'work'; wakeSky(); renderStrip(); }
 function topOn(on) { $('#top').classList.toggle('on', on); if (!on) { closeSheet('#open'); closeSheet('#menu'); } }
 
 async function playSignin() {
@@ -258,6 +290,8 @@ setInterval(() => { $('#clock').textContent = new Date().toLocaleTimeString(unde
 $('#clock').textContent = new Date().toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
 $('#device').addEventListener('click', () => { if (allowed('vitals')) openApp('vitals'); });
 $('#me').addEventListener('click', () => toggleSheet('#menu'));
+$('#solisBtn').addEventListener('click', () => { if (state.scene === 'work' && state.panes.some(p => p.id === 'solis')) setFocus('solis'); else openApp('solis'); });
+document.addEventListener('keydown', e => { if (e.altKey && e.key.toLowerCase() === 's' && signedIn && allowed('solis')) { e.preventDefault(); $('#solisBtn').click(); } });
 function toggleSheet(s) { const on = !$(s).classList.contains('on'); ['#open', '#menu'].forEach(x => closeSheet(x)); if (on) $(s).classList.add('on'); }
 function closeSheet(s) { $(s).classList.remove('on'); }
 document.addEventListener('pointerdown', e => { if (!e.target.closest('.sheet') && !e.target.closest('.strip .add') && !e.target.closest('#me')) { closeSheet('#open'); closeSheet('#menu'); } });
@@ -283,6 +317,7 @@ const APPS = {
   vitals: { name: 'Vitals', c: '#33BFE2', icon: 'pulse', build: vitalsApp },
   activity: { name: 'Activity', c: '#5A5F68', icon: 'shield', build: activityApp },
   terminal: { name: 'Terminal', c: '#2F3138', icon: 'prompt', build: terminalApp, flush: true },
+  solis: { name: 'Solis', c: '#1F2A3A', icon: 'star', build: solisApp, flush: true },
 };
 let facets = [];
 function appOf(id) {
@@ -297,6 +332,7 @@ function appOf(id) {
 /* ── Home ────────────────────────────────────────────────────────────── */
 function goHome() { seq++; gather = 1; showScene('home'); topOn(true); renderHome(); }
 async function renderHome() {
+  $('#solisBtn').hidden = !allowed('solis');
   const h = $('#s-home');
   const tiles = Object.entries(APPS).filter(([id]) => allowed(id)).map(([id, a], i) => `<button class="tile" data-open="${id}"><span class="m" style="--c:${a.c};--d:${(-i * 0.7) % 4.4}s">${svg(a.icon)}</span>${a.name}</button>`).join('');
   h.innerHTML = `
@@ -315,29 +351,51 @@ async function renderHome() {
   if (state.role === 'guest') return;
   loadServices().then(renderHosted);
   try {
-    const a = await api.get('/api/access?limit=20');
-    const last = (a.entries || []).find(e => e.kind === 'signedin' && !e.who.startsWith('link:'));
+    // Sign-ins only: everything else (saving the layout, a link opened) is
+    // recorded too, and would bury them.
+    const a = await api.get('/api/access?kind=signedin&limit=10');
+    const last = (a.entries || []).find(e => !e.who.startsWith('link:'));
     $('#lastIn').innerHTML = last ? `<span class="k">Last signed in</span><b>${esc(last.who === 'admin' ? 'You' : last.who)}${last.how === 'console' ? ', on this PC' : `, from ${esc(last.from)}`}</b><p>${ago(last.unix)} · ${esc({ code: 'with a code', password: 'with your password', console: 'from this PC', bridge: 'through POLARIS' }[last.how] || last.how)}</p>` : `<span class="k">Last signed in</span><b>Nobody yet</b><p>Every sign-in is recorded here, sealed.</p>`;
   } catch (e) {}
 }
-// Only what the person opened before on this device: the last picture and
-// the last folder. Never a file surfaced on its own: a desktop that puts
-// someone's newest picture on screen at sign-in is a desktop nobody can
-// open in front of anyone.
+// **Recent and pinned**: what the person opened, and the folders they keep
+// in the sidebar. Kept on the host with the layout (so they follow the
+// person between devices); a guest's stay on their own device. Only what
+// was opened: nothing is ever surfaced on its own.
+function remember(item) {
+  const key = JSON.stringify([item.kind, item.root, item.path]);
+  state.recent = [item, ...state.recent.filter(r => JSON.stringify([r.kind, r.root, r.path]) !== key)].slice(0, 8);
+  if (state.role === 'guest') { try { localStorage.setItem('prism.recent', JSON.stringify(state.recent)); } catch (e) {} }
+  persist();
+}
+function forget(item) {
+  state.recent = state.recent.filter(r => r !== item);
+  if (state.role === 'guest') { try { localStorage.setItem('prism.recent', JSON.stringify(state.recent)); } catch (e) {} }
+  persist(); posters();
+}
+function pinned(root, path) { return state.pins.some(p => p.root === root && p.path === path); }
+function pin(root, path, on) {
+  state.pins = state.pins.filter(p => !(p.root === root && p.path === path));
+  if (on) state.pins.push({ root, path });
+  if (state.role === 'guest') { try { localStorage.setItem('prism.pins', JSON.stringify(state.pins)); } catch (e) {} }
+  persist(); $$('.pane[data-app="files"] .pbody').forEach(b => b.__pins && b.__pins());
+}
 function posters() {
   const box = $('#posters'); if (!box) return;
-  const read = k => { try { return JSON.parse(localStorage.getItem(k) || 'null'); } catch (e) { return null; } };
-  const photo = read('prism.lastPhoto'), folder = read('prism.lastFolder');
   box.innerHTML = '';
-  if (photo) {
-    const b = el(`<button class="poster"><img alt="" src="/api/files/thumb?${q({ root: photo.root, path: photo.dir ? photo.dir + '/' + photo.name : photo.name })}"><span class="cap"><span style="min-width:0"><b>${esc(photo.name)}</b><span>The picture you were looking at</span></span></span></button>`);
-    b.addEventListener('click', () => openApp('photos', photo)); box.appendChild(b);
+  for (const r of [...state.recent.filter(r => r.kind !== 'dir'), ...state.recent.filter(r => r.kind === 'dir')].slice(0, 4)) {
+    const full = r.path;
+    const b = r.kind === 'photo'
+      ? el(`<button class="poster"><img alt="" src="/api/files/thumb?${q({ root: r.root, path: full })}"><span class="cap"><span style="min-width:0"><b>${esc(full.split('/').pop())}</b><span>${esc(r.root)}${full.includes('/') ? ' › ' + esc(full.split('/').slice(0, -1).join('/')) : ''}</span></span></span></button>`)
+      : r.kind === 'video'
+      ? el(`<button class="poster"><img alt="" src="/api/files/thumb?${q({ root: r.root, path: full })}"><span class="cap"><span class="playbtn">${svg('play', '#2F3138', 2.6)}</span><span style="min-width:0"><b>${esc(full.split('/').pop())}</b><span>${r.at ? `${Math.floor(r.at / 60)}:${String(Math.floor(r.at % 60)).padStart(2, '0')} in` : 'Watch'}</span></span></span></button>`)
+      : el(`<button class="poster"><span class="art">${svg('folder', '#E5A23A')}</span><span class="cap"><span style="min-width:0"><b>${esc(full ? full.split('/').pop() : r.root)}</b><span>${full ? esc(r.root) + (full.includes('/') ? ' › ' + esc(full.split('/').slice(0, -1).join('/')) : '') : 'Folder'}</span></span></span></button>`);
+    const open = () => r.kind === 'photo' ? openApp('photos', { root: r.root, dir: full.split('/').slice(0, -1).join('/'), name: full.split('/').pop() }) : r.kind === 'video' ? openApp('videos', { root: r.root, path: full, name: full.split('/').pop(), at: r.at }) : openApp('files', { root: r.root, path: full });
+    b.addEventListener('click', open);
+    b.addEventListener('contextmenu', ev => { ev.preventDefault(); menu(ev.clientX, ev.clientY, [{ label: 'Open', icon: r.kind === 'dir' ? 'folder' : r.kind === 'video' ? 'play' : 'photo', act: open }, r.kind !== 'dir' && { label: 'Show in Files', icon: 'folder', act: () => openApp('files', { root: r.root, path: full.split('/').slice(0, -1).join('/') }) }, 'sep', { label: 'Remove from Jump back in', icon: 'x', danger: true, act: () => forget(r) }]); });
+    box.appendChild(b);
   }
-  if (folder) {
-    const b = el(`<button class="poster"><span class="art">${svg('folder', '#E5A23A')}</span><span class="cap"><span style="min-width:0"><b>${esc(folder.path ? folder.path.split('/').pop() : folder.root)}</b><span>${esc(folder.root)}${folder.path ? ' › ' + esc(folder.path) : ''}</span></span></span></button>`);
-    b.addEventListener('click', () => openApp('files', folder)); box.appendChild(b);
-  }
-  if (!box.children.length) box.appendChild(el(`<div class="card"><b>Nothing to carry on yet</b><p>The picture and the folder you were last in will wait here.</p></div>`));
+  if (!box.children.length) box.appendChild(el(`<div class="card"><b>Nothing to carry on yet</b><p>What you open, pictures, films and folders, waits here for next time.</p></div>`));
 }
 async function loadServices() { try { facets = await api.get('/api/facets'); } catch (e) {} return facets; }
 function renderHosted() {
@@ -348,13 +406,8 @@ function renderHosted() {
   exposed.forEach((f, i) => {
     const pol = /face-stream/.test(f.command || ''), running = f.state === 'running' || f.state === 'foreign';
     const b = el(`<button class="tile"><span class="m" style="--c:${pol ? '#7C5CE0' : running ? '#2E9E62' : '#9A978F'};--d:${-i * .9}s">${svg(pol ? 'play' : 'globe')}${pol ? `<span class="pstar">${svg('star')}</span>` : ''}</span>${esc(f.expose.title || f.name)}<small>${running ? (pol ? 'POLARIS, streamed' : 'running') : 'stopped'}</small></button>`);
-    b.addEventListener('click', async () => {
-      if (!running) {
-        if (f.state === 'stopped' && f.available) { toast(`Starting ${f.name}…`); try { await api.post(`/api/facets/${f.id}/start`); } catch (e) { toast(`${f.name} didn't start: ${e.message}`, true); return; } await new Promise(r => setTimeout(r, pol ? 15000 : 2500)); }
-        else { toast(`${f.name} isn't running.`, true); return; }
-      }
-      openApp('web:' + f.id);
-    });
+    b.addEventListener('click', () => openHosted(f.id));
+    b.addEventListener('contextmenu', ev => { ev.preventDefault(); serviceMenu(f, ev.clientX, ev.clientY); });
     box.appendChild(b);
   });
   const run = facets.filter(f => f.state === 'running').length;
@@ -378,36 +431,115 @@ function launch(tile, id) {
   });
 }
 
+/* ── Right-click menus ───────────────────────────────────────────────── */
+// Every thing on screen can say what can be done with it. Items: {label,
+// icon, act, danger, disabled, hint} or 'sep'.
+function menu(x, y, items) {
+  closeMenus();
+  const m = el(`<div class="ctx" role="menu"></div>`);
+  for (const it of items) {
+    if (it === 'sep') { m.appendChild(el('<span class="sep"></span>')); continue; }
+    if (!it) continue;
+    const b = el(`<button role="menuitem"${it.danger ? ' class="danger"' : ''}>${it.icon ? svg(it.icon, 'currentColor', 2.2) : '<i></i>'}<span>${esc(it.label)}</span>${it.hint ? `<small>${esc(it.hint)}</small>` : ''}</button>`);
+    if (it.disabled) b.disabled = true;
+    b.addEventListener('click', () => { closeMenus(); it.act && it.act(); });
+    m.appendChild(b);
+  }
+  document.body.appendChild(m);
+  const r = m.getBoundingClientRect();
+  m.style.left = Math.max(8, Math.min(x, innerWidth - r.width - 8)) + 'px';
+  m.style.top = Math.max(8, Math.min(y, innerHeight - r.height - 8)) + 'px';
+  requestAnimationFrame(() => m.classList.add('on'));
+  m.querySelector('button:not([disabled])')?.focus({ preventScroll: true });
+  m.addEventListener('keydown', e => {
+    const bs = [...m.querySelectorAll('button:not([disabled])')], i = bs.indexOf(document.activeElement);
+    if (e.key === 'ArrowDown') { bs[(i + 1) % bs.length]?.focus(); e.preventDefault(); }
+    if (e.key === 'ArrowUp') { bs[(i - 1 + bs.length) % bs.length]?.focus(); e.preventDefault(); }
+    if (e.key === 'Escape') { e.stopPropagation(); closeMenus(); }
+  });
+}
+function closeMenus() { $$('.ctx').forEach(m => { m.classList.remove('on'); setTimeout(() => m.remove(), 160); }); }
+document.addEventListener('pointerdown', e => { if (!e.target.closest('.ctx')) closeMenus(); }, true);
+addEventListener('blur', closeMenus);
+// The browser's own menu only where text is being edited.
+document.addEventListener('contextmenu', e => { if (!e.target.closest('input, textarea, .xt, iframe, [data-native-menu]')) e.preventDefault(); });
+
 /* ── The window manager: floating or tiled, the person's choice ──────── */
-const MAXN = () => state.wm === 'float' ? 6 : 4;
+// Tiled is a master and a stack, as Hyprland's master layout: the first pane
+// on the left, the rest stacked on the right. The gaps between them drag to
+// resize; Ctrl+drag picks a pane up (swap, or move when floating),
+// Ctrl+right-drag resizes it; focus follows the mouse.
+const MAXN = 6, GAP = 8;
 let zTop = 10;
+state.split = { main: .56, rows: [] };
 function openApp(id, args, alone) {
   const a = appOf(id); if (!a || !allowed(id)) return;
   const existing = state.panes.find(p => p.id === id);
   if (existing) { if (args) { existing.args = args; const pe = paneEl(id); if (pe) rebuild(pe, existing); } state.focus = id; }
   else if (alone || state.scene !== 'work') { state.panes = [{ id, args }]; state.focus = id; }
   else {
-    if (state.panes.length >= MAXN()) state.panes[state.panes.findIndex(p => p.id === state.focus)] = { id, args };
+    if (state.panes.length >= MAXN) state.panes[state.panes.findIndex(p => p.id === state.focus)] = { id, args };
     else state.panes.push({ id, args });
     state.focus = id;
   }
   showScene('work'); renderPanes(); persist();
 }
 const paneEl = id => $(`.pane[data-app="${CSS.escape(id)}"]`);
-function floatSpot(i, n, W, H) {
-  const cells = { 1: [[0, 0, 1, 1]], 2: [[0, 0, .5, 1], [.5, 0, .5, 1]], 3: [[0, 0, .57, 1], [.57, 0, .43, .5], [.57, .5, .43, .5]], 4: [[0, 0, .5, .5], [.5, 0, .5, .5], [0, .5, .5, .5], [.5, .5, .5, .5]] };
-  const c = (cells[n] || [])[i];
-  if (c) { const inset = n === 1 ? .05 : .025; return { l: (c[0] + inset) * W, t: (c[1] + inset) * H, w: (c[2] - inset * 1.4) * W - 14, h: (c[3] - inset * 1.4) * H - 14 }; }
-  return { l: W * (.1 + .05 * i), t: H * (.06 + .05 * i), w: W * .5, h: H * .62 };
+// Where each pane sits when tiled: [l, t, w, h] in pixels.
+function tileRects(n, W, H) {
+  if (n <= 1) return [[0, 0, W, H]];
+  const mw = Math.round((W - GAP) * Math.min(.8, Math.max(.2, state.split.main)));
+  const rows = state.split.rows.length === n - 1 ? state.split.rows : (state.split.rows = Array(n - 1).fill(1));
+  const sum = rows.reduce((a, b) => a + b, 0), avail = H - GAP * (n - 2);
+  const out = [[0, 0, mw, H]];
+  let y = 0;
+  rows.forEach((r, i) => { const h = i === n - 2 ? H - y : Math.round(avail * r / sum); out.push([mw + GAP, y, W - mw - GAP, h]); y += h + GAP; });
+  return out;
 }
-function placeFloat() {
+function floatSpot(i, n, W, H) {
+  const r = tileRects(Math.min(n, 4), W, H)[Math.min(i, 3)] || [W * .1, H * .08, W * .5, H * .6];
+  const inset = 18 + i * 10;
+  return { l: r[0] + inset, t: r[1] + inset, w: Math.max(340, r[2] - inset * 1.4), h: Math.max(240, r[3] - inset * 1.4) };
+}
+function place() {
   const box = $('#panes'), W = box.clientWidth, H = box.clientHeight;
-  state.panes.forEach((p, i) => {
-    const e = paneEl(p.id); if (!e) return;
-    let s = state.pos[p.id];
-    if (!s || s.l > W - 80 || s.t > H - 40) s = state.pos[p.id] = floatSpot(i, state.panes.length, W, H);
-    Object.assign(e.style, { left: s.l + 'px', top: s.t + 'px', width: Math.min(s.w, W) + 'px', height: Math.min(s.h, H) + 'px' });
-    if (!e.style.zIndex) e.style.zIndex = ++zTop;
+  if (state.wm === 'tile') {
+    const rects = tileRects(state.panes.length, W, H);
+    state.panes.forEach((p, i) => { const e = paneEl(p.id); if (!e) return; const [l, t, w, h] = rects[i]; Object.assign(e.style, { left: l + 'px', top: t + 'px', width: w + 'px', height: h + 'px', zIndex: '' }); });
+    gutters(rects);
+  } else {
+    $$('.gutter').forEach(g => g.remove());
+    state.panes.forEach((p, i) => {
+      const e = paneEl(p.id); if (!e) return;
+      let s = state.pos[p.id];
+      if (!s || s.l > W - 80 || s.t > H - 40) s = state.pos[p.id] = floatSpot(i, state.panes.length, W, H);
+      Object.assign(e.style, { left: s.l + 'px', top: s.t + 'px', width: Math.min(s.w, W) + 'px', height: Math.min(s.h, H) + 'px' });
+      if (!e.style.zIndex) e.style.zIndex = ++zTop;
+    });
+  }
+}
+// The gaps between tiles, to drag.
+function gutters(rects) {
+  $$('.gutter').forEach(g => g.remove());
+  const box = $('#panes'), n = rects.length; if (n < 2 || matchMedia('(max-width:640px)').matches) return;
+  const v = el(`<div class="gutter v" style="left:${rects[0][2]}px;top:0;height:${box.clientHeight}px"></div>`);
+  drag(v, (dx) => { state.split.main = Math.min(.8, Math.max(.2, (rects[0][2] + dx) / (box.clientWidth - GAP))); place(); });
+  box.appendChild(v);
+  for (let i = 1; i < n - 1; i++) {
+    const r = rects[i];
+    const g = el(`<div class="gutter h" style="left:${r[0]}px;top:${r[1] + r[3]}px;width:${r[2]}px"></div>`);
+    const a0 = state.split.rows[i - 1], b0 = state.split.rows[i], hsum = rects[i][3] + rects[i + 1][3];
+    drag(g, (dx, dy) => { const t = Math.min(.85, Math.max(.15, (rects[i][3] + dy) / hsum)); state.split.rows[i - 1] = (a0 + b0) * t; state.split.rows[i] = (a0 + b0) * (1 - t); place(); });
+    box.appendChild(g);
+  }
+}
+function drag(handle, move) {
+  handle.addEventListener('pointerdown', e => {
+    e.preventDefault(); handle.setPointerCapture(e.pointerId); handle.classList.add('on'); $('#panes').classList.add('resizing');
+    const sx = e.clientX, sy = e.clientY;
+    const mv = m => move(m.clientX - sx, m.clientY - sy);
+    const up = () => { handle.removeEventListener('pointermove', mv); handle.removeEventListener('pointerup', up); handle.classList.remove('on'); $('#panes').classList.remove('resizing'); persist(); };
+    handle.addEventListener('pointermove', mv); handle.addEventListener('pointerup', up);
   });
 }
 function glide(change) {
@@ -417,66 +549,125 @@ function glide(change) {
   state.panes.forEach(p => {
     const e = paneEl(p.id), a = before.get(p.id); if (!e || !a) return;
     const b = e.getBoundingClientRect(); if (!b.width) return;
-    e.animate([{ transformOrigin: 'top left', transform: `translate(${a.left - b.left}px,${a.top - b.top}px) scale(${a.width / b.width},${a.height / b.height})` }, { transformOrigin: 'top left', transform: 'none' }], { duration: 480, easing: 'cubic-bezier(.2,.8,.2,1)' });
+    e.animate([{ transformOrigin: 'top left', transform: `translate(${a.left - b.left}px,${a.top - b.top}px) scale(${a.width / b.width},${a.height / b.height})` }, { transformOrigin: 'top left', transform: 'none' }], { duration: 420, easing: 'cubic-bezier(.2,.9,.25,1.05)' });
   });
 }
 function setWM(mode) {
   if (state.wm === mode) return;
-  glide(() => {
-    state.wm = mode; const box = $('#panes');
-    box.classList.toggle('float', mode === 'float');
-    if (mode === 'float') placeFloat();
-    else { $$('.pane').forEach(e => { e.style.left = e.style.top = e.style.width = e.style.height = e.style.zIndex = ''; e.classList.remove('max'); }); if (state.panes.length > 4) { state.panes = state.panes.slice(0, 4); renderPanes(); } }
-  });
+  glide(() => { state.wm = mode; $$('.pane').forEach(e => e.classList.remove('max')); $('#panes').classList.toggle('float', mode === 'float'); place(); });
   renderStrip(); persist();
+}
+function setFocus(id, quiet) {
+  if (state.focus === id) return;
+  state.focus = id;
+  $$('.pane').forEach(x => x.classList.toggle('focus', x.dataset.app === id));
+  if (state.wm === 'float') { const f = paneEl(id); if (f) f.style.zIndex = ++zTop; }
+  renderStrip();
+  if (!quiet) persist();
 }
 function renderPanes() {
   const box = $('#panes');
-  box.dataset.n = Math.min(state.panes.length, 4); box.classList.toggle('float', state.wm === 'float');
-  const have = new Map([...box.children].map(c => [c.dataset.app, c]));
+  box.classList.toggle('float', state.wm === 'float');
+  const have = new Map([...box.querySelectorAll('.pane')].map(c => [c.dataset.app, c]));
   for (const [id, e] of have) if (!state.panes.some(p => p.id === id)) { e.__close && e.__close(); e.remove(); }
-  const order = [...box.children].map(c => c.dataset.app).join();
-  state.panes.forEach(p => { const e = have.get(p.id) || makePane(p); if (!e.isConnected || order !== state.panes.map(x => x.id).join()) box.appendChild(e); e.classList.toggle('focus', p.id === state.focus); });
+  state.panes.forEach(p => { const e = have.get(p.id) || makePane(p); if (!e.isConnected) box.appendChild(e); });
   if (!state.focus || !state.panes.some(p => p.id === state.focus)) state.focus = state.panes[state.panes.length - 1]?.id;
-  if (state.wm === 'float') { placeFloat(); const f = paneEl(state.focus); if (f && +f.style.zIndex !== zTop) f.style.zIndex = ++zTop; }
+  $$('.pane').forEach(x => x.classList.toggle('focus', x.dataset.app === state.focus));
+  place();
+  if (state.wm === 'float') { const f = paneEl(state.focus); if (f && +f.style.zIndex !== zTop) f.style.zIndex = ++zTop; }
   renderStrip();
 }
 function rebuild(e, p) { const body = e.querySelector('.pbody'); body.__close && body.__close(); body.innerHTML = ''; body.appendChild(appOf(p.id).build(p.args, body, p)); }
+function paneMenu(p, x, y) {
+  const i = state.panes.findIndex(q => q.id === p.id);
+  menu(x, y, [
+    { label: 'Only this one', icon: 'solo', act: () => { state.panes = [p]; state.focus = p.id; renderPanes(); persist(); } },
+    state.wm === 'tile' && i > 0 && { label: 'Make it the main one', icon: 'tiles', act: () => glide(() => { state.panes.splice(i, 1); state.panes.unshift(p); renderPanes(); persist(); }) },
+    { label: state.wm === 'float' ? 'Tile everything' : 'Float everything', icon: state.wm === 'float' ? 'tiles' : 'windows', act: () => { setWM(state.wm === 'float' ? 'tile' : 'float'); syncMenu(); } },
+    p.id.startsWith('web:') && { label: 'Reload its page', icon: 'again', act: () => { const fr = paneEl(p.id)?.querySelector('iframe'); if (fr) fr.src = fr.src; } },
+    p.id.startsWith('web:') && { label: 'Service…', icon: 'stack', act: () => { const f = facets.find(x => x.id === p.id.slice(4)); f && serviceMenu(f, x, y); } },
+    'sep',
+    { label: 'Close', icon: 'x', danger: true, hint: 'Esc', act: () => closePane(p.id) },
+  ]);
+}
 function makePane(p) {
   const a = appOf(p.id);
   const e = el(`<section class="pane" data-app="${esc(p.id)}"><div class="phead"><span class="tk" style="background:${a.c}">${svg(a.icon)}</span><h2>${esc(a.name)}</h2><button class="b solo" title="Only this one" aria-label="Only ${esc(a.name)}">${svg('solo', 'currentColor', 2.4)}</button><button class="b x" aria-label="Close ${esc(a.name)}">${svg('x', 'currentColor', 2.6)}</button></div><div class="pbody${a.flush ? ' flush' : ''}"></div><span class="grip" aria-hidden="true"></span></section>`);
   const body = e.querySelector('.pbody');
   body.appendChild(a.build(p.args, body, p));
   e.__close = () => body.__close && body.__close();
-  e.addEventListener('pointerdown', () => { if (state.focus !== p.id) { state.focus = p.id; renderPanes(); persist(); } });
+  // Focus follows the mouse, as a tiling desktop does.
+  e.addEventListener('pointerenter', () => { if (!dragging) setFocus(p.id, true); });
+  e.addEventListener('pointerdown', () => setFocus(p.id));
   e.querySelector('.x').addEventListener('click', ev => { ev.stopPropagation(); closePane(p.id); });
   e.querySelector('.solo').addEventListener('click', ev => { ev.stopPropagation(); state.panes = [state.panes.find(x => x.id === p.id)]; state.focus = p.id; renderPanes(); persist(); });
   const head = e.querySelector('.phead');
+  head.addEventListener('contextmenu', ev => { if (!ev.ctrlKey) { ev.preventDefault(); paneMenu(p, ev.clientX, ev.clientY); } });
   head.addEventListener('dblclick', ev => { if (state.wm === 'float' && !ev.target.closest('button')) glide(() => e.classList.toggle('max')); });
-  head.addEventListener('pointerdown', ev => {
-    if (ev.target.closest('button') || matchMedia('(max-width:640px)').matches) return;
-    if (state.wm === 'float') {
-      if (e.classList.contains('max')) return;
-      head.setPointerCapture(ev.pointerId); const box = $('#panes'), sx = ev.clientX, sy = ev.clientY, s = state.pos[p.id], l0 = s.l, t0 = s.t;
-      const mv = m => { s.l = Math.min(box.clientWidth - 120, Math.max(-s.w + 120, l0 + m.clientX - sx)); s.t = Math.min(box.clientHeight - 50, Math.max(0, t0 + m.clientY - sy)); e.style.left = s.l + 'px'; e.style.top = s.t + 'px'; };
-      const up = () => { head.removeEventListener('pointermove', mv); head.removeEventListener('pointerup', up); persist(); };
-      head.addEventListener('pointermove', mv); head.addEventListener('pointerup', up);
-    } else if (state.panes.length > 1) {
-      head.setPointerCapture(ev.pointerId); let over = null;
-      const mv = m => { const t = document.elementFromPoint(m.clientX, m.clientY)?.closest('.pane'); if (over && over !== t) over.classList.remove('drop'); over = t && t !== e ? t : null; over && over.classList.add('drop'); };
-      const up = () => { head.removeEventListener('pointermove', mv); head.removeEventListener('pointerup', up);
-        if (over) { over.classList.remove('drop'); const ia = state.panes.findIndex(x => x.id === p.id), ib = state.panes.findIndex(x => x.id === over.dataset.app); [state.panes[ia], state.panes[ib]] = [state.panes[ib], state.panes[ia]]; renderPanes(); persist(); } };
-      head.addEventListener('pointermove', mv); head.addEventListener('pointerup', up);
-    }
-  });
+  head.addEventListener('pointerdown', ev => { if (ev.button === 0 && !ev.target.closest('button')) pickUp(e, p, ev); });
+  // Ctrl+left anywhere on a pane picks it up; Ctrl+right resizes it.
+  e.addEventListener('pointerdown', ev => {
+    if (!ev.ctrlKey || matchMedia('(max-width:640px)').matches) return;
+    ev.preventDefault(); ev.stopPropagation();
+    if (ev.button === 0) pickUp(e, p, ev);
+    if (ev.button === 2) resizeBy(e, p, ev);
+  }, true);
+  e.addEventListener('contextmenu', ev => { if (ev.ctrlKey) ev.preventDefault(); }, true);
   const grip = e.querySelector('.grip');
-  grip.addEventListener('pointerdown', ev => {
-    ev.stopPropagation(); grip.setPointerCapture(ev.pointerId); const sx = ev.clientX, sy = ev.clientY, s = state.pos[p.id], w0 = s.w, h0 = s.h;
-    const mv = m => { s.w = Math.max(320, w0 + m.clientX - sx); s.h = Math.max(220, h0 + m.clientY - sy); e.style.width = s.w + 'px'; e.style.height = s.h + 'px'; };
-    const up = () => { grip.removeEventListener('pointermove', mv); grip.removeEventListener('pointerup', up); persist(); };
-    grip.addEventListener('pointermove', mv); grip.addEventListener('pointerup', up);
-  });
+  grip.addEventListener('pointerdown', ev => { ev.stopPropagation(); resizeBy(e, p, ev); });
   return e;
+}
+let dragging = false;
+function pickUp(e, p, ev) {
+  if (matchMedia('(max-width:640px)').matches) return;
+  const box = $('#panes'), sx = ev.clientX, sy = ev.clientY;
+  const cap = ev.target.setPointerCapture ? ev.target : e; try { cap.setPointerCapture(ev.pointerId); } catch (x) {}
+  dragging = true; e.classList.add('lifted');
+  if (state.wm === 'float') {
+    if (e.classList.contains('max')) { dragging = false; e.classList.remove('lifted'); return; }
+    const s = state.pos[p.id], l0 = s.l, t0 = s.t;
+    const mv = m => { s.l = Math.min(box.clientWidth - 120, Math.max(-s.w + 120, l0 + m.clientX - sx)); s.t = Math.min(box.clientHeight - 50, Math.max(0, t0 + m.clientY - sy)); e.style.left = s.l + 'px'; e.style.top = s.t + 'px'; };
+    const up = () => { cap.removeEventListener('pointermove', mv); cap.removeEventListener('pointerup', up); dragging = false; e.classList.remove('lifted'); persist(); };
+    cap.addEventListener('pointermove', mv); cap.addEventListener('pointerup', up);
+  } else {
+    let over = null; const r0 = e.getBoundingClientRect();
+    const mv = m => {
+      e.style.transform = `translate(${m.clientX - sx}px,${m.clientY - sy}px) scale(.97)`;
+      e.style.pointerEvents = 'none';
+      const t = document.elementFromPoint(m.clientX, m.clientY)?.closest('.pane');
+      e.style.pointerEvents = '';
+      if (over && over !== t) over.classList.remove('drop'); over = t && t !== e ? t : null; over && over.classList.add('drop');
+    };
+    const up = () => {
+      cap.removeEventListener('pointermove', mv); cap.removeEventListener('pointerup', up); dragging = false; e.classList.remove('lifted');
+      e.style.transform = '';
+      if (over) { over.classList.remove('drop'); const ia = state.panes.findIndex(x => x.id === p.id), ib = state.panes.findIndex(x => x.id === over.dataset.app); glide(() => { [state.panes[ia], state.panes[ib]] = [state.panes[ib], state.panes[ia]]; place(); }); persist(); }
+      else if (!reduce) e.animate([{ transform: `translate(${0}px,0)` }], { duration: 1 });
+    };
+    cap.addEventListener('pointermove', mv); cap.addEventListener('pointerup', up);
+  }
+}
+function resizeBy(e, p, ev) {
+  if (matchMedia('(max-width:640px)').matches) return;
+  const box = $('#panes'), sx = ev.clientX, sy = ev.clientY; dragging = true; box.classList.add('resizing');
+  try { e.setPointerCapture(ev.pointerId); } catch (x) {}
+  let mv;
+  if (state.wm === 'float') {
+    const s = state.pos[p.id], w0 = s.w, h0 = s.h;
+    mv = m => { s.w = Math.max(320, w0 + m.clientX - sx); s.h = Math.max(220, h0 + m.clientY - sy); e.style.width = s.w + 'px'; e.style.height = s.h + 'px'; };
+  } else {
+    const i = state.panes.findIndex(x => x.id === p.id), main0 = state.split.main, W = box.clientWidth - GAP;
+    const rows0 = [...state.split.rows], H = box.clientHeight;
+    mv = m => {
+      const dx = m.clientX - sx, dy = m.clientY - sy;
+      // The main pane grows to the right; a stacked one grows to the left.
+      state.split.main = Math.min(.8, Math.max(.2, main0 + (i === 0 ? dx : -dx) / W));
+      if (i > 0 && rows0.length > 1) { const k = i - 1, sum = rows0.reduce((a, b) => a + b, 0), grow = dy / H * sum; const j = k < rows0.length - 1 ? k + 1 : k - 1; state.split.rows[k] = Math.max(.15, rows0[k] + grow); state.split.rows[j] = Math.max(.15, rows0[j] - grow); }
+      place();
+    };
+  }
+  const up = () => { e.removeEventListener('pointermove', mv); e.removeEventListener('pointerup', up); dragging = false; box.classList.remove('resizing'); persist(); };
+  e.addEventListener('pointermove', mv); e.addEventListener('pointerup', up);
 }
 function closePane(id) {
   const e = paneEl(id); if (!e) return;
@@ -486,8 +677,8 @@ function closePane(id) {
     state.panes = state.panes.filter(p => p.id !== id); delete state.pos[id];
     if (state.focus === id) state.focus = state.panes[state.panes.length - 1]?.id;
     persist();
-    if (!state.panes.length) goHome(); else renderPanes();
-  }, 280);
+    if (!state.panes.length) goHome(); else glide(() => renderPanes());
+  }, 220);
 }
 function renderStrip() {
   const s = $('#strip'); s.innerHTML = '';
@@ -497,7 +688,8 @@ function renderStrip() {
   state.panes.forEach(p => {
     const a = appOf(p.id); if (!a) return;
     const b = el(`<button class="chip${state.scene === 'work' && p.id === state.focus ? ' on' : ''}"><span class="tk" style="background:${a.c}">${svg(a.icon)}</span>${esc(a.name)}<span class="x" role="button" aria-label="Close ${esc(a.name)}">${svg('x', 'currentColor', 3)}</span></button>`);
-    b.addEventListener('click', ev => { if (ev.target.closest('.x')) { closePane(p.id); return; } state.focus = p.id; if (state.scene !== 'work') showScene('work'); renderPanes(); persist(); });
+    b.addEventListener('click', ev => { if (ev.target.closest('.x')) { closePane(p.id); return; } if (state.scene !== 'work') showScene('work'); setFocus(p.id); });
+    b.addEventListener('contextmenu', ev => { ev.preventDefault(); paneMenu(p, ev.clientX, ev.clientY); });
     s.appendChild(b);
   });
   const add = el(`<button class="add" aria-label="Open an App beside">${svg('plus', 'currentColor', 2.8)}</button>`);
@@ -508,75 +700,116 @@ function renderStrip() {
 function openSheet() {
   const row = $('#openRow'); row.innerHTML = '';
   $('#openTitle').textContent = state.scene === 'work' ? 'Open beside' : 'Open';
-  $('#openHint').textContent = state.wm === 'float' ? 'Up to six windows. One more replaces the one you are in.' : 'Up to four Apps share the screen. One more replaces the one you are in.';
-  const all = [...Object.keys(APPS).filter(allowed), ...(state.role === 'guest' ? [] : facets).filter(f => f.expose && (f.state === 'running' || f.state === 'foreign')).map(f => 'web:' + f.id)];
+  $('#openHint').textContent = 'Up to six at once. One more replaces the one you are in.';
+  const all = [...Object.keys(APPS).filter(allowed), ...(state.role === 'guest' ? [] : facets).filter(f => f.expose).map(f => 'web:' + f.id)];
   all.forEach(id => {
     const a = appOf(id);
     const b = el(`<button><span class="m" style="--c:${a.c}">${svg(a.icon)}</span>${esc(a.name)}</button>`);
     if (state.scene === 'work' && state.panes.some(p => p.id === id)) b.disabled = true;
-    b.addEventListener('click', () => { closeSheet('#open'); openApp(id); }); row.appendChild(b);
+    b.addEventListener('click', () => { closeSheet('#open'); id.startsWith('web:') ? openHosted(id.slice(4)) : openApp(id); }); row.appendChild(b);
   });
   toggleSheet('#open');
 }
-addEventListener('resize', () => { if (state.wm === 'float' && state.scene === 'work') placeFloat(); });
+addEventListener('resize', () => { if (state.scene === 'work') place(); });
 document.addEventListener('keydown', e => {
   if (e.key !== 'Escape') return;
+  if ($('.ctx')) { closeMenus(); return; }
   if ($('#open').classList.contains('on') || $('#menu').classList.contains('on')) { closeSheet('#open'); closeSheet('#menu'); return; }
-  if (e.target.closest && e.target.closest('.xt')) return;
+  if (e.target.closest && e.target.closest('.xt, input, textarea, video')) return;
   if (state.scene === 'work' && state.focus) closePane(state.focus);
 });
 
 /* ── Files ───────────────────────────────────────────────────────────── */
 const KIND_ICON = { dir: ['folder', '#E5A23A'], image: ['photo', '#2E71C8'], video: ['play', '#C0485C'], audio: ['music', '#7C5CE0'], text: ['doc', '#868B94'], pdf: ['doc', '#C0485C'], archive: ['box', '#9A978F'], other: ['doc', '#9A978F'] };
 function filesApp(args, body, pane) {
-  const root = el(`<div class="files"><div class="places"></div><div class="browse"><div class="crumbs"></div><div class="grid"></div></div></div>`);
-  let roots = [], cur = { root: args?.root, path: args?.path || '' };
-  const places = root.querySelector('.places'), crumbs = root.querySelector('.crumbs'), grid = root.querySelector('.grid');
-  async function load() {
-    pane.args = { ...cur }; persist();
-    try { localStorage.setItem('prism.lastFolder', JSON.stringify(cur)); } catch (e) {}
-    places.querySelectorAll('.place').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.root === cur.root)));
-    const parts = cur.path ? cur.path.split('/') : [];
-    const writable = state.role !== 'guest' && roots.find(r => r.name === cur.root)?.writable;
-    crumbs.innerHTML = '';
-    const rb = el(`<button>${esc(cur.root)}</button>`); rb.addEventListener('click', () => { cur.path = ''; load(); }); crumbs.appendChild(rb);
-    parts.forEach((p, i) => { crumbs.appendChild(el('<span>›</span>')); const b = el(`<button>${esc(p)}</button>`); b.addEventListener('click', () => { cur.path = parts.slice(0, i + 1).join('/'); load(); }); crumbs.appendChild(b); });
-    const sb = el(`<button class="btn">${svg('link', '#fff', 2.4)}Share</button>`);
-    sb.addEventListener('click', () => openShare(cur.root, cur.path, !!writable));
-    const shareWrap = el(`<span class="acts"></span>`); shareWrap.appendChild(sb);
-    if (!writable && state.role !== 'guest') crumbs.appendChild(shareWrap);
-    if (writable) {
-      const acts = el(`<span class="acts"><button class="btn q" data-a="dir">${svg('newdir', 'currentColor', 2.2)}Folder</button><label class="btn">${svg('up', '#fff', 2.4)}Upload<input type="file" multiple hidden></label></span>`);
-      acts.querySelector('[data-a="dir"]').addEventListener('click', async () => {
-        const name = await ask('A name for the new folder'); if (!name) return;
-        try { await api.post('/api/files/mkdir', { root: cur.root, path: cur.path, name }); load(); } catch (e) { toast(e.message, true); }
-      });
-      acts.querySelector('input').addEventListener('change', ev => upload([...ev.target.files]));
-      acts.appendChild(sb);
-      crumbs.appendChild(acts);
+  const root = el(`<div class="files"><aside class="places"></aside><div class="browse"><div class="fbar"><div class="crumbs"></div><label class="search">${svg('search', 'currentColor', 2.4)}<input type="search" placeholder="Search this folder" aria-label="Search this folder"></label></div><div class="grid" tabindex="0"></div></div></div>`);
+  let roots = [], cur = { root: args?.root, path: args?.path || '' }, entries = [], shown = [], sel = 0, typed = '', typedAt = 0, stay = 0;
+  const places = root.querySelector('.places'), crumbs = root.querySelector('.crumbs'), grid = root.querySelector('.grid'), search = root.querySelector('.search input');
+  const writable = () => state.role !== 'guest' && roots.find(r => r.name === cur.root)?.writable;
+  const fullOf = x => cur.path ? `${cur.path}/${x.name}` : x.name;
+  // The sidebar: only what the person pinned. Pin a folder from its menu.
+  function drawPins() {
+    places.innerHTML = '<div class="group">Pinned</div>';
+    if (!state.pins.length) places.appendChild(el(`<p class="hint">Right-click a folder and choose Pin to keep it here.</p>`));
+    for (const p of state.pins) {
+      if (!roots.some(r => r.name === p.root)) continue;
+      const b = el(`<button class="place" aria-pressed="${p.root === cur.root && p.path === cur.path}"><span class="tk" style="background:#E5A23A">${svg('folder')}</span><span>${esc(p.path ? p.path.split('/').pop() : p.root)}</span></button>`);
+      b.addEventListener('click', () => { cur = { ...p }; load(); });
+      b.addEventListener('contextmenu', ev => { ev.preventDefault(); menu(ev.clientX, ev.clientY, [{ label: 'Open', icon: 'folder', act: () => { cur = { ...p }; load(); } }, { label: 'Unpin', icon: 'x', act: () => pin(p.root, p.path, false) }]); });
+      places.appendChild(b);
     }
-    grid.innerHTML = `<div class="empty">Opening…</div>`;
-    let l;
-    try { l = await api.get(`/api/files/list?${q({ root: cur.root, path: cur.path, limit: 2000 })}`); }
-    catch (e) { grid.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
-    const entries = (l.entries || []).filter(x => !x.name.startsWith('.')).sort((a, b) => (b.is_dir - a.is_dir) || a.name.localeCompare(b.name, undefined, { numeric: true }));
-    grid.innerHTML = entries.length ? '' : `<div class="empty">${writable ? 'Empty. Drop files here to upload them.' : 'Empty.'}</div>`;
-    const images = entries.filter(x => x.kind === 'image').map(x => x.name);
-    for (const x of entries.slice(0, 600)) {
+  }
+  body.__pins = drawPins;
+  function select(i, scroll = true) {
+    sel = Math.max(0, Math.min(shown.length - 1, i));
+    grid.querySelectorAll('.thing').forEach((t, j) => t.classList.toggle('sel', j === sel));
+    if (scroll) grid.querySelectorAll('.thing')[sel]?.scrollIntoView({ block: 'nearest', behavior: reduce ? 'auto' : 'smooth' });
+  }
+  function open(x) {
+    const full = fullOf(x);
+    if (x.is_dir) { cur.path = full; load(); }
+    else if (x.kind === 'image') { openApp('photos', { root: cur.root, dir: cur.path, name: x.name, list: entries.filter(e => e.kind === 'image').map(e => e.name) }); }
+    else if (x.kind === 'video' || x.kind === 'audio') openApp('videos', { root: cur.root, path: full, name: x.name });
+    else window.open(`/api/files/raw?${q({ root: cur.root, path: full })}`, '_blank', 'noopener');
+  }
+  function itemMenu(x, ev) {
+    const full = fullOf(x), w = writable();
+    menu(ev.clientX, ev.clientY, [
+      { label: 'Open', icon: x.is_dir ? 'folder' : (KIND_ICON[x.kind] || KIND_ICON.other)[0], act: () => open(x), hint: 'Enter' },
+      !x.is_dir && { label: 'Download', icon: 'down', act: () => { const a = document.createElement('a'); a.href = `/api/files/raw?${q({ root: cur.root, path: full, download: true })}`; a.download = x.name; a.click(); } },
+      x.is_dir && { label: pinned(cur.root, full) ? 'Unpin' : 'Pin to the sidebar', icon: 'pin', act: () => pin(cur.root, full, !pinned(cur.root, full)) },
+      x.is_dir && state.role !== 'guest' && { label: 'Share a link…', icon: 'link', act: () => openShare(cur.root, full, !!w) },
+      { label: 'Copy its path', icon: 'doc', act: () => navigator.clipboard?.writeText(`${cur.root}/${full}`).then(() => toast('Path copied.'), () => {}) },
+      w && 'sep',
+      w && { label: 'Rename…', icon: 'pen', act: async () => { const n = await ask(`A new name for ${x.name}`, x.name); if (!n || n === x.name) return; try { await api.post('/api/files/rename', { root: cur.root, path: full, name: n }); load(); } catch (e) { toast(e.message, true); } } },
+      w && { label: 'Delete', icon: 'trash', danger: true, act: async () => { const ok = await ask(`Delete ${x.name}? There's no undo.`, null, 'Delete'); if (!ok) return; try { await api.post('/api/files/delete', { root: cur.root, path: full, recursive: x.is_dir }); toast(`${x.name} deleted.`); load(); } catch (e) { toast(e.message, true); } } },
+      'sep',
+      { label: `${x.is_dir ? 'Folder' : bytes(x.size)}${x.modified ? ' · ' + new Date(x.modified * 1000).toLocaleString(undefined, { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''}`, disabled: true },
+    ]);
+  }
+  function draw() {
+    const f = search.value.trim().toLowerCase();
+    shown = f ? entries.filter(x => x.name.toLowerCase().includes(f)) : entries;
+    grid.innerHTML = shown.length ? '' : `<div class="empty">${f ? `Nothing here matches “${esc(search.value)}”.` : writable() ? 'Empty. Drop files here to upload them.' : 'Empty.'}</div>`;
+    for (const x of shown.slice(0, 800)) {
       const [ic, c] = KIND_ICON[x.kind] || KIND_ICON.other;
-      const full = cur.path ? `${cur.path}/${x.name}` : x.name;
-      const thumb = x.kind === 'image' || x.kind === 'video';
-      const b = el(`<button class="thing"><span class="th">${svg(ic, c, 2.2)}${thumb ? `<img loading="lazy" alt="" src="/api/files/thumb?${q({ root: cur.root, path: full })}" onerror="this.remove()">` : ''}${x.is_dir && state.role !== 'guest' ? `<span class="fshare" role="button" aria-label="Share ${esc(x.name)}" title="Share this folder">${svg('link', '#fff', 2.4)}</span>` : ''}</span><b title="${esc(x.name)}">${esc(x.name)}</b><small>${x.is_dir ? 'Folder' : bytes(x.size)}${x.modified ? ' · ' + ago(x.modified) : ''}</small></button>`);
-      const fs = b.querySelector('.fshare'); if (fs) fs.addEventListener('click', ev => { ev.stopPropagation(); openShare(cur.root, full, !!writable); });
-      b.addEventListener('click', () => {
-        if (x.is_dir) { cur.path = full; load(); }
-        else if (x.kind === 'image') openApp('photos', { root: cur.root, dir: cur.path, name: x.name, list: images });
-        else if (x.kind === 'video' || x.kind === 'audio') openApp('videos', { root: cur.root, path: full, name: x.name });
-        else window.open(`/api/files/raw?${q({ root: cur.root, path: full })}`, '_blank', 'noopener');
-      });
+      const full = fullOf(x), thumb = x.kind === 'image' || x.kind === 'video';
+      const b = el(`<button class="thing" tabindex="-1"><span class="th">${svg(ic, c, 2.2)}${thumb ? `<img loading="lazy" alt="" src="/api/files/thumb?${q({ root: cur.root, path: full })}" onerror="this.remove()">` : ''}${x.is_dir && pinned(cur.root, full) ? `<span class="pinmark">${svg('pin', '#fff', 2.4)}</span>` : ''}</span><b title="${esc(x.name)}">${esc(x.name)}</b><small>${x.is_dir ? 'Folder' : bytes(x.size)}${x.modified ? ' · ' + ago(x.modified) : ''}</small></button>`);
+      b.addEventListener('click', ev => { const i = shown.indexOf(x); if (sel === i || ev.detail > 1 || matchMedia('(hover:none)').matches) open(x); else select(i, false); });
+      b.addEventListener('dblclick', () => open(x));
+      b.addEventListener('contextmenu', ev => { ev.preventDefault(); select(shown.indexOf(x), false); itemMenu(x, ev); });
       grid.appendChild(b);
     }
-    if (entries.length > 600) grid.appendChild(el(`<div class="empty">And ${entries.length - 600} more.</div>`));
+    select(Math.min(sel, shown.length - 1), false);
+  }
+  async function load() {
+    pane.args = { ...cur }; search.value = ''; sel = 0;
+    // A folder counts once the person stays in it, not each one passed through.
+    clearTimeout(stay); const here = { kind: 'dir', root: cur.root, path: cur.path }; stay = setTimeout(() => remember(here), 4000);
+    const parts = cur.path ? cur.path.split('/') : [];
+    crumbs.innerHTML = '';
+    // The root is a switcher: every folder this PC shares.
+    const rb = el(`<button class="rootb">${svg('box', 'currentColor', 2.2)}${esc(cur.root)}${svg('down2', 'currentColor', 2.4)}</button>`);
+    rb.addEventListener('click', ev => { const r = rb.getBoundingClientRect(); menu(r.left, r.bottom + 6, roots.map(x => ({ label: x.name, icon: 'folder', hint: x.writable && state.role !== 'guest' ? 'can change' : 'look only', act: () => { cur = { root: x.name, path: '' }; load(); } }))); });
+    crumbs.appendChild(rb);
+    parts.forEach((p, i) => { crumbs.appendChild(el('<span class="chev">›</span>')); const b = el(`<button>${esc(p)}</button>`); b.addEventListener('click', () => { cur.path = parts.slice(0, i + 1).join('/'); load(); }); crumbs.appendChild(b); });
+    const acts = el(`<span class="acts"></span>`);
+    if (state.role !== 'guest') { const sb = el(`<button class="ib" title="Share this folder" aria-label="Share this folder">${svg('link', 'currentColor', 2.4)}</button>`); sb.addEventListener('click', () => openShare(cur.root, cur.path, !!writable())); acts.appendChild(sb); }
+    if (writable()) {
+      const nb = el(`<button class="ib" title="New folder" aria-label="New folder">${svg('newdir', 'currentColor', 2.2)}</button>`);
+      nb.addEventListener('click', async () => { const name = await ask('A name for the new folder'); if (!name) return; try { await api.post('/api/files/mkdir', { root: cur.root, path: cur.path, name }); load(); } catch (e) { toast(e.message, true); } });
+      const ub = el(`<label class="ib" title="Upload" aria-label="Upload">${svg('up', 'currentColor', 2.4)}<input type="file" multiple hidden></label>`);
+      ub.querySelector('input').addEventListener('change', ev => upload([...ev.target.files]));
+      acts.append(nb, ub);
+    }
+    crumbs.appendChild(acts);
+    drawPins();
+    grid.innerHTML = `<div class="empty">Opening…</div>`;
+    try {
+      const l = await api.get(`/api/files/list?${q({ root: cur.root, path: cur.path, limit: 4000 })}`);
+      entries = (l.entries || []).filter(x => !x.name.startsWith('.')).sort((a, b) => (b.is_dir - a.is_dir) || a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
+    } catch (e) { entries = []; grid.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+    draw();
   }
   async function upload(files) {
     for (const f of files) {
@@ -586,28 +819,52 @@ function filesApp(args, body, pane) {
     }
     load();
   }
-  root.addEventListener('dragover', e => { if (roots.find(r => r.name === cur.root)?.writable) { e.preventDefault(); grid.classList.add('over'); } });
+  search.addEventListener('input', () => { sel = 0; draw(); });
+  search.addEventListener('keydown', e => { if (e.key === 'Enter' && shown[0]) open(shown[sel] || shown[0]); if (e.key === 'ArrowDown') { grid.focus(); select(0); e.preventDefault(); } if (e.key === 'Escape' && search.value) { e.stopPropagation(); search.value = ''; draw(); } });
+  // Type to jump: letters select the first name that starts with them.
+  root.addEventListener('keydown', e => {
+    if (e.target === search || e.ctrlKey || e.metaKey || e.altKey) return;
+    const cols = Math.max(1, Math.round(grid.clientWidth / (grid.querySelector('.thing')?.offsetWidth + 14 || 160)));
+    if (e.key === 'ArrowRight') select(sel + 1); else if (e.key === 'ArrowLeft') select(sel - 1);
+    else if (e.key === 'ArrowDown') select(sel + cols); else if (e.key === 'ArrowUp') select(sel - cols);
+    else if (e.key === 'Enter' && shown[sel]) open(shown[sel]);
+    else if (e.key === 'Backspace' && cur.path) { cur.path = cur.path.split('/').slice(0, -1).join('/'); load(); }
+    else if (e.key === 'ContextMenu' && shown[sel]) { const r = grid.querySelectorAll('.thing')[sel].getBoundingClientRect(); itemMenu(shown[sel], { clientX: r.left + 20, clientY: r.top + 20 }); }
+    else if (e.key === 'f' && (e.ctrlKey || e.metaKey)) { search.focus(); }
+    else if (e.key.length === 1 && /\S/.test(e.key)) {
+      const now = performance.now(); typed = (now - typedAt > 900 ? '' : typed) + e.key.toLowerCase(); typedAt = now;
+      const i = shown.findIndex(x => x.name.toLowerCase().startsWith(typed));
+      if (i >= 0) select(i);
+    } else return;
+    e.preventDefault();
+  });
+  root.addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key === 'f') { e.preventDefault(); search.focus(); } });
+  grid.addEventListener('contextmenu', ev => { if (ev.target.closest('.thing')) return; ev.preventDefault(); const w = writable(); menu(ev.clientX, ev.clientY, [
+    w && { label: 'New folder…', icon: 'newdir', act: async () => { const name = await ask('A name for the new folder'); if (!name) return; try { await api.post('/api/files/mkdir', { root: cur.root, path: cur.path, name }); load(); } catch (e) { toast(e.message, true); } } },
+    { label: pinned(cur.root, cur.path) ? 'Unpin this folder' : 'Pin this folder', icon: 'pin', act: () => pin(cur.root, cur.path, !pinned(cur.root, cur.path)) },
+    state.role !== 'guest' && { label: 'Share this folder…', icon: 'link', act: () => openShare(cur.root, cur.path, !!w) },
+    cur.path && { label: 'Up a folder', icon: 'up', hint: 'Backspace', act: () => { cur.path = cur.path.split('/').slice(0, -1).join('/'); load(); } },
+  ]); });
+  root.addEventListener('dragover', e => { if (writable()) { e.preventDefault(); grid.classList.add('over'); } });
   root.addEventListener('dragleave', () => grid.classList.remove('over'));
   root.addEventListener('drop', e => { e.preventDefault(); grid.classList.remove('over'); upload([...e.dataTransfer.files]); });
   api.get('/api/files/roots').then(rs => {
     roots = rs;
-    if (!rs.length) { grid.innerHTML = '<div class="empty">No folders are shared in prism.toml yet.</div>'; return; }
-    places.innerHTML = '';
-    rs.forEach(r => { const b = el(`<button class="place" data-root="${esc(r.name)}"><span class="tk" style="background:${r.writable ? '#2E9E62' : '#E5A23A'}">${svg('folder')}</span>${esc(r.name)}<small>${r.writable ? 'can change' : 'look only'}</small></button>`); b.addEventListener('click', () => { cur = { root: r.name, path: '' }; load(); }); places.appendChild(b); });
-    if (!cur.root || !rs.some(r => r.name === cur.root)) cur.root = rs[0].name;
-    load();
+    if (!rs.length) { grid.innerHTML = `<div class="empty">${state.role === 'guest' ? 'No folders are open to guests here.' : 'No folders are shared in prism.toml yet.'}</div>`; return; }
+    if (!cur.root || !rs.some(r => r.name === cur.root)) cur = { root: (state.pins.find(p => rs.some(r => r.name === p.root)) || { root: rs[0].name }).root, path: (state.pins.find(p => rs.some(r => r.name === p.root)) || { path: '' }).path };
+    load(); setTimeout(() => grid.focus({ preventScroll: true }), 50);
   }).catch(e => { grid.innerHTML = `<div class="empty">${esc(e.message)}</div>`; });
   return root;
 }
 // A small in-page question: the browser's prompt() isn't allowed everywhere.
-function ask(question) {
+function ask(question, value, yes) {
   return new Promise(res => {
-    const s = el(`<div class="sheet on" style="left:50%;top:30%;transform:translateX(-50%);width:min(420px,calc(100% - 32px))"><h3>${esc(question)}</h3><input style="border:3px solid var(--line);border-radius:12px;padding:10px 12px;background:var(--mount);color:var(--on-mount)"><div style="display:flex;gap:8px;justify-content:flex-end"><button class="btn q">Cancel</button><button class="btn">OK</button></div></div>`);
-    document.body.appendChild(s); const i = s.querySelector('input'); i.focus();
+    const s = el(`<div class="asksheet" role="dialog"><h3>${esc(question)}</h3>${value === null ? '' : `<input value="${esc(value || '')}">`}<div class="row2b"><button class="btn q">Cancel</button><button class="btn${yes ? ' bad' : ''}">${esc(yes || 'OK')}</button></div></div>`);
+    document.body.appendChild(s); const i = s.querySelector('input'); (i || s.querySelector('.btn:not(.q)')).focus(); if (i) i.select();
     const done = v => { s.remove(); res(v); };
     s.querySelector('.btn.q').addEventListener('click', () => done(null));
-    s.querySelector('.btn:not(.q)').addEventListener('click', () => done(i.value.trim() || null));
-    i.addEventListener('keydown', e => { if (e.key === 'Enter') done(i.value.trim() || null); if (e.key === 'Escape') { e.stopPropagation(); done(null); } });
+    s.querySelector('.btn:not(.q)').addEventListener('click', () => done(i ? (i.value.trim() || null) : true));
+    s.addEventListener('keydown', e => { if (e.key === 'Enter') done(i ? (i.value.trim() || null) : true); if (e.key === 'Escape') { e.stopPropagation(); done(null); } });
   });
 }
 
@@ -703,7 +960,7 @@ function photosApp(args) {
   const pathOf = n => args.dir ? `${args.dir}/${n}` : n;
   function show(i) {
     at = (i + list.length) % list.length; const n = list[at];
-    try { localStorage.setItem('prism.lastPhoto', JSON.stringify({ root: args.root, dir: args.dir, name: n, list: list.length < 400 ? list : [n] })); } catch (e) {}
+    remember({ kind: 'photo', root: args.root, path: pathOf(n) });
     img.style.opacity = 0;
     const next = new Image(); next.onload = () => { img.src = next.src; img.style.opacity = 1; }; next.src = `/api/files/raw?${q({ root: args.root, path: pathOf(n) })}`;
     root.querySelector('.info').innerHTML = `<b>${esc(n)}</b><span>${esc(args.root)}${args.dir ? ' › ' + esc(args.dir) : ''} · ${at + 1} of ${list.length}</span>`;
@@ -721,18 +978,101 @@ function photosApp(args) {
 }
 
 /* ── Videos ──────────────────────────────────────────────────────────── */
-function videosApp(args) {
-  const root = el(`<div class="player"><video controls playsinline preload="metadata"></video><p class="meta"></p></div>`);
+// A player of our own: speed, loop, volume, seeking by keys, picture in
+// picture. Keys follow the ones people know: Space/K play, J/L ten seconds,
+// ←/→ five, ↑/↓ volume, M mute, F full screen, [ ] speed, 0–9 jump.
+const SPEEDS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 3];
+function videosApp(args, body, pane) {
+  const root = el(`<div class="player" tabindex="0"><div class="stage"><video playsinline preload="metadata"></video><div class="bigplay">${svg('play', '#fff', 2.4)}</div><div class="osd"></div></div>
+    <div class="vbar"><input class="seek" type="range" min="0" max="1000" value="0" aria-label="Position"><div class="vrow">
+      <button class="vb play" aria-label="Play">${svg('play', 'currentColor', 2.4)}</button>
+      <span class="time">0:00 / 0:00</span>
+      <span class="vname"></span>
+      <button class="vb loop" aria-label="Loop" aria-pressed="false" title="Loop">${svg('loop', 'currentColor', 2.2)}</button>
+      <button class="vb speed" aria-label="Speed" title="Speed  [ ]">1×</button>
+      <span class="volw"><button class="vb vol" aria-label="Mute" title="Mute  M">${svg('vol', 'currentColor', 2.2)}</button><input class="volr" type="range" min="0" max="1" step="0.02" value="1" aria-label="Volume"></span>
+      <button class="vb pipb" aria-label="Picture in picture" title="Picture in picture">${svg('pip', 'currentColor', 2.2)}</button>
+      <button class="vb fullb" aria-label="Full screen" title="Full screen  F">${svg('full', 'currentColor', 2.2)}</button>
+    </div></div><p class="meta"></p></div>`);
   if (!args?.root) { root.innerHTML = `<div class="empty">Open a film or a song from Files.</div>`; return root; }
-  const v = root.querySelector('video'), meta = root.querySelector('.meta');
-  meta.textContent = `${args.name} · checking how to play it…`;
+  const v = root.querySelector('video'), meta = root.querySelector('.meta'), seek = root.querySelector('.seek'), osd = root.querySelector('.osd');
+  const fmt = t => { if (!isFinite(t)) return '–:––'; t = Math.floor(t); const h = Math.floor(t / 3600), m = Math.floor(t % 3600 / 60), x = String(t % 60).padStart(2, '0'); return h ? `${h}:${String(m).padStart(2, '0')}:${x}` : `${m}:${x}`; };
+  let say = 0;
+  const flash = text => { osd.textContent = text; osd.classList.add('on'); clearTimeout(say); say = setTimeout(() => osd.classList.remove('on'), 700); };
+  let prefs = { vol: 1, rate: 1 }; try { prefs = { ...prefs, ...JSON.parse(localStorage.getItem('prism.player') || '{}') }; } catch (e) {}
+  const keep = () => { try { localStorage.setItem('prism.player', JSON.stringify({ vol: v.volume, rate: v.playbackRate, muted: v.muted })); } catch (e) {} };
+  v.volume = prefs.vol; v.muted = !!prefs.muted; v.playbackRate = prefs.rate; v.defaultPlaybackRate = prefs.rate;
+  root.querySelector('.vname').textContent = args.name;
+  const playB = root.querySelector('.play'), speedB = root.querySelector('.speed'), volB = root.querySelector('.vol'), volR = root.querySelector('.volr'), loopB = root.querySelector('.loop');
+  const sync = () => {
+    playB.innerHTML = svg(v.paused ? 'play' : 'pause', 'currentColor', 2.4); playB.setAttribute('aria-label', v.paused ? 'Play' : 'Pause');
+    root.classList.toggle('paused', v.paused);
+    speedB.textContent = `${v.playbackRate}×`;
+    volB.innerHTML = svg(v.muted || v.volume === 0 ? 'mute' : 'vol', 'currentColor', 2.2); volR.value = v.muted ? 0 : v.volume; volR.style.setProperty('--p', volR.value * 100 + '%');
+    loopB.setAttribute('aria-pressed', String(v.loop));
+  };
+  const toggle = () => { v.paused ? v.play().catch(() => {}) : v.pause(); };
+  const jump = d => { v.currentTime = Math.max(0, Math.min((v.duration || 0) - .1, v.currentTime + d)); flash(`${d > 0 ? '+' : '−'}${Math.abs(d)} s`); };
+  const rate = d => { const i = SPEEDS.indexOf(v.playbackRate); v.playbackRate = SPEEDS[Math.max(0, Math.min(SPEEDS.length - 1, (i < 0 ? 3 : i) + d))]; flash(`${v.playbackRate}×`); keep(); };
+  const vol = d => { v.muted = false; v.volume = Math.max(0, Math.min(1, Math.round((v.volume + d) * 20) / 20)); flash(`Volume ${Math.round(v.volume * 100)}%`); keep(); };
+  let lastSave = 0;
+  v.addEventListener('timeupdate', () => {
+    if (!seek.matches(':active')) seek.value = v.duration ? Math.round(v.currentTime / v.duration * 1000) : 0;
+    seek.style.setProperty('--p', seek.value / 10 + '%');
+    root.querySelector('.time').textContent = `${fmt(v.currentTime)} / ${fmt(v.duration)}`;
+    // Where it was left, for Jump back in.
+    if (performance.now() - lastSave > 5000 && v.currentTime > 5) { lastSave = performance.now(); remember({ kind: 'video', root: args.root, path: args.path, at: Math.floor(v.currentTime) }); }
+  });
+  ['play', 'pause', 'ratechange', 'volumechange'].forEach(ev => v.addEventListener(ev, sync));
+  v.addEventListener('loadedmetadata', () => { if (args.at && args.at < v.duration - 5) v.currentTime = args.at; sync(); });
+  seek.addEventListener('input', () => { seek.style.setProperty('--p', seek.value / 10 + '%'); if (v.duration) v.currentTime = seek.value / 1000 * v.duration; });
+  v.addEventListener('click', toggle); root.querySelector('.bigplay').addEventListener('click', toggle);
+  v.addEventListener('dblclick', () => full());
+  playB.addEventListener('click', toggle);
+  loopB.addEventListener('click', () => { v.loop = !v.loop; flash(v.loop ? 'Looping' : 'Loop off'); sync(); });
+  speedB.addEventListener('click', ev => { const r = speedB.getBoundingClientRect(); menu(r.left, r.top - 8 - SPEEDS.length * 34, SPEEDS.map(x => ({ label: `${x}×${x === 1 ? '  normal' : ''}`, icon: v.playbackRate === x ? 'play' : null, act: () => { v.playbackRate = x; keep(); } }))); });
+  volB.addEventListener('click', () => { v.muted = !v.muted; keep(); });
+  volR.addEventListener('input', () => { v.muted = false; v.volume = +volR.value; keep(); });
+  const full = () => { const st = root; document.fullscreenElement ? document.exitFullscreen().catch(() => {}) : st.requestFullscreen?.().catch(() => {}); };
+  root.querySelector('.fullb').addEventListener('click', full);
+  const pip = root.querySelector('.pipb');
+  if (!document.pictureInPictureEnabled) pip.hidden = true;
+  pip.addEventListener('click', () => { document.pictureInPictureElement ? document.exitPictureInPicture().catch(() => {}) : v.requestPictureInPicture?.().catch(e => toast(e.message, true)); });
+  root.addEventListener('keydown', e => {
+    if (e.target.closest('input[type=range]') && /Arrow/.test(e.key)) return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    const k = e.key.toLowerCase();
+    if (k === ' ' || k === 'k') toggle(); else if (k === 'j') jump(-10); else if (k === 'l') jump(10);
+    else if (k === 'arrowleft') jump(-5); else if (k === 'arrowright') jump(5);
+    else if (k === 'arrowup') vol(.05); else if (k === 'arrowdown') vol(-.05);
+    else if (k === 'm') { v.muted = !v.muted; flash(v.muted ? 'Muted' : 'Sound on'); keep(); }
+    else if (k === 'f') full(); else if (k === '[' || k === '<') rate(-1); else if (k === ']' || k === '>') rate(1);
+    else if (k === 'r') { v.loop = !v.loop; flash(v.loop ? 'Looping' : 'Loop off'); sync(); }
+    else if (/^[0-9]$/.test(k) && v.duration) v.currentTime = v.duration * (+k / 10);
+    else return;
+    e.preventDefault();
+  });
+  root.addEventListener('pointerdown', () => root.focus({ preventScroll: true }));
+  let idle = 0; root.addEventListener('pointermove', () => { root.classList.add('awake'); clearTimeout(idle); idle = setTimeout(() => root.classList.remove('awake'), 2200); });
+  v.addEventListener('contextmenu', ev => { ev.preventDefault(); menu(ev.clientX, ev.clientY, [
+    { label: v.paused ? 'Play' : 'Pause', icon: v.paused ? 'play' : 'pause', hint: 'Space', act: toggle },
+    { label: v.loop ? 'Stop looping' : 'Loop', icon: 'loop', hint: 'R', act: () => { v.loop = !v.loop; sync(); } },
+    { label: 'Picture in picture', icon: 'pip', act: () => pip.click() },
+    { label: 'Download', icon: 'down', act: () => { const a = document.createElement('a'); a.href = `/api/files/raw?${q({ root: args.root, path: args.path, download: true })}`; a.download = args.name; a.click(); } },
+    { label: 'Show in Files', icon: 'folder', act: () => openApp('files', { root: args.root, path: args.path.split('/').slice(0, -1).join('/') }) },
+  ]); });
+  meta.textContent = 'Checking how to play it…';
   api.get(`/api/files/media?${q({ root: args.root, path: args.path })}`).then(info => {
     const k = info.playability?.kind;
-    if (k === 'direct') { v.src = `/api/files/raw?${q({ root: args.root, path: args.path })}`; meta.textContent = `${args.name} · played as it is`; }
-    else if (k === 'remux' || k === 'transcode') { v.src = `/api/files/stream?${q({ root: args.root, path: args.path })}`; meta.textContent = `${args.name} · ${k === 'remux' ? 'rewrapped' : 'converted on this PC'} as it plays, for this browser${k === 'transcode' ? ' (seeking starts it again from there)' : ''}`; }
-    else { meta.textContent = `${args.name} · this browser can't play it, and it can't be converted.`; }
-  }).catch(e => { meta.textContent = `${args.name} · ${e.message}`; });
+    if (k === 'direct') { v.src = `/api/files/raw?${q({ root: args.root, path: args.path })}`; meta.textContent = 'Played as it is'; }
+    else if (k === 'remux' || k === 'transcode') { v.src = `/api/files/stream?${q({ root: args.root, path: args.path })}`; meta.textContent = `${k === 'remux' ? 'Rewrapped' : 'Converted on this PC'} as it plays, for this browser${k === 'transcode' ? ' (seeking starts it again from there)' : ''}`; }
+    else { meta.textContent = "This browser can't play it, and it can't be converted."; }
+    v.playbackRate = prefs.rate; sync();
+  }).catch(e => { meta.textContent = e.message; });
+  remember({ kind: 'video', root: args.root, path: args.path, at: args.at || 0 });
+  sync(); setTimeout(() => root.focus({ preventScroll: true }), 60);
   root.__close = () => { v.pause(); v.removeAttribute('src'); v.load(); };
+  body.__close = root.__close;
   return root;
 }
 
@@ -750,9 +1090,10 @@ function servicesApp(args, body) {
       const lim = [f.limits?.memory_max && `at most ${f.limits.memory_max}`, f.limits?.swap_max != null && (f.limits.swap_max === '0' ? 'no swap' : `up to ${f.limits.swap_max} in swap`)].filter(Boolean).join(', ');
       const r = el(`<div class="row"><span class="ic" style="--c:${pol ? '#7C5CE0' : '#2E9E62'}">${esc((f.name || f.id)[0].toUpperCase())}</span><b>${esc(f.name)}${pol ? ' · POLARIS' : ''}</b><span class="meta">${f.state === 'running' && f.memory_mib != null ? mib(f.memory_mib) + ' now' : ''}${lim ? (f.state === 'running' ? ' · ' : '') + lim : ''}${f.state === 'foreign' ? 'Started outside PRISM, so PRISM only asks it, never stops it' : ''}${!f.available && f.unavailable_because ? esc(f.unavailable_because) : ''}</span><span class="state"><span class="tag ${tag[0]}">${tag[1]}</span></span></div>`);
       const st = r.querySelector('.state');
-      if (f.expose && (f.state === 'running' || f.state === 'foreign')) { const o = el(`<button class="btn">Open</button>`); o.addEventListener('click', () => openApp('web:' + f.id)); st.appendChild(o); }
+      r.addEventListener('contextmenu', ev => { ev.preventDefault(); serviceMenu(f, ev.clientX, ev.clientY, draw); });
+      if (f.expose && (f.state === 'running' || f.state === 'foreign')) { const o = el(`<button class="btn">Open</button>`); o.addEventListener('click', () => openHosted(f.id)); st.appendChild(o); }
       if (f.state === 'running') { const s = el(`<button class="btn q">Stop</button>`); s.addEventListener('click', async () => { s.disabled = true; try { await api.post(`/api/facets/${f.id}/stop`); toast(`${f.name} stopped.`); } catch (e) { toast(e.message, true); } draw(); }); st.appendChild(s); }
-      else if ((f.state === 'stopped' || f.state === 'failed') && f.available && !f.pty) { const s = el(`<button class="btn q">Start</button>`); s.addEventListener('click', async () => { s.disabled = true; try { await api.post(`/api/facets/${f.id}/start`); toast(`${f.name} is starting.`); } catch (e) { toast(e.message, true); } setTimeout(draw, 1500); }); st.appendChild(s); }
+      else if ((f.state === 'stopped' || f.state === 'failed') && f.available) { const s = el(`<button class="btn q">Start</button>`); s.addEventListener('click', async () => { s.disabled = true; if (f.expose) { await openHosted(f.id); } else { try { await api.post(`/api/facets/${f.id}/start`); toast(`${f.name} is starting.`); } catch (e) { toast(e.message, true); } } setTimeout(draw, 1500); }); st.appendChild(s); }
       root.appendChild(r);
     });
     const known = new Set(facets.map(f => f.expose?.port).filter(Boolean));
@@ -894,10 +1235,120 @@ function terminalApp(args, body, pane) {
   return host;
 }
 
+/* ── Solis: POLARIS's agent, through PRISM (prismd/src/solis.rs) ───── */
+// A text conversation over the gateway's own protocol: hello, then items;
+// the answer arrives in pieces. Closing the pane leaves the conversation in
+// POLARIS, so it carries on from any device.
+function solisApp(args, body) {
+  const root = el(`<div class="solis"><div class="sky2" aria-hidden="true"></div><div class="talk" aria-live="polite"></div><form class="say"><textarea rows="1" placeholder="Ask Solis anything" aria-label="Ask Solis"></textarea><button class="send" type="submit" aria-label="Send">${svg('send', '#fff', 2.4)}</button></form></div>`);
+  const talk = root.querySelector('.talk'), ta = root.querySelector('textarea'), send = root.querySelector('.send');
+  let ws = null, closed = false, ready = false, live = null, busy = false, tries = 0;
+  const id = () => 'evt_' + Math.random().toString(36).slice(2, 10);
+  const bubble = (who, text) => { const b = el(`<div class="msg ${who}"><p></p></div>`); b.querySelector('p').textContent = text; talk.appendChild(b); talk.scrollTop = talk.scrollHeight; return b; };
+  const note = html => { const n = el(`<div class="note">${html}</div>`); talk.appendChild(n); return n; };
+  const setBusy = on => { busy = on; send.innerHTML = svg(on ? 'stop' : 'send', '#fff', 2.4); send.setAttribute('aria-label', on ? 'Stop' : 'Send'); root.classList.toggle('thinking', on); };
+  async function connect() {
+    if (closed) return;
+    let here = null; try { here = await api.get('/api/solis'); } catch (e) {}
+    if (!here?.up) {
+      talk.innerHTML = '';
+      note(`<b>Solis isn't here yet</b><p>Solis lives in POLARIS on ${esc(state.host)}. Start POLARIS there, and in its Settings › Clients, turn on the gateway. This page connects by itself once it's up.</p>`);
+      setTimeout(connect, 5000); return;
+    }
+    ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/solis/realtime`);
+    ws.onopen = () => { tries = 0; ws.send(JSON.stringify({ type: 'session.hello', event_id: id(), protocol: { min: '7.0.0', max: '7.0.0' }, client: { type: 'web', version: 'prism', instance_id: 'prism_' + (state.me || 'owner') }, capabilities: ['input.text', 'conversation.history'] })); };
+    ws.onmessage = ev => {
+      let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
+      if (m.type === 'session.ready') { ready = true; if (!talk.querySelector('.msg')) { talk.innerHTML = ''; note(`<b>Solis is here</b><p>Type, and Solis answers. What you say is kept in POLARIS, not in this browser.</p>`); } ta.focus(); }
+      else if (m.type === 'conversation.item.input_audio_transcription.completed') bubble('me', m.transcript);
+      else if (m.type === 'response.created') { setBusy(true); live = bubble('them', ''); live.classList.add('live'); }
+      else if (m.type === 'response.output_audio_transcript.delta') { if (!live) live = bubble('them', ''); live.querySelector('p').textContent += m.delta; talk.scrollTop = talk.scrollHeight; }
+      else if (m.type === 'response.output_audio_transcript.done') { if (live) live.querySelector('p').textContent = m.transcript; }
+      else if (m.type === 'response.done') { setBusy(false); if (live) { live.classList.remove('live'); if (m.status === 'cancelled') live.classList.add('cut'); if (!live.querySelector('p').textContent) live.remove(); } live = null; }
+      else if (m.type === 'session.ping') ws.send(JSON.stringify({ type: 'session.pong', event_id: id() }));
+      else if (m.type === 'error') { setBusy(false); note(`<p>${esc(m.error?.message || 'Something went wrong.')}</p>`); }
+    };
+    ws.onclose = () => { ready = false; setBusy(false); if (!closed) setTimeout(connect, Math.min(1000 * 2 ** tries++, 10000)); };
+  }
+  function submit() {
+    if (busy) { ws?.send(JSON.stringify({ type: 'response.cancel', event_id: id() })); return; }
+    const text = ta.value.trim(); if (!text || !ready) return;
+    bubble('me', text); ta.value = ''; ta.style.height = '';
+    ws.send(JSON.stringify({ type: 'conversation.item.create', event_id: id(), item: { type: 'message', role: 'user', content: [{ type: 'input_text', text }] } }));
+    setBusy(true);
+  }
+  root.querySelector('form').addEventListener('submit', e => { e.preventDefault(); submit(); });
+  ta.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); } });
+  ta.addEventListener('input', () => { ta.style.height = ''; ta.style.height = Math.min(160, ta.scrollHeight) + 'px'; });
+  note('<p>Reaching Solis…</p>');
+  connect();
+  body.__close = () => { closed = true; ws?.close(); };
+  return root;
+}
+
 /* ── A service's own page, through PRISM ─────────────────────────────── */
+// Each hosted app is served at the root of a port of its own (ports.rs), so
+// apps that write absolute paths (ComfyUI) work; /facet/<id>/ is the
+// fallback. Same session either way: the browser sends this host's cookies
+// whatever the port.
 function webApp(args, body, pane) {
   const id = pane.id.slice(4);
-  return el(`<iframe class="webpane" src="/facet/${encodeURIComponent(id)}/" title="${esc(id)}" allow="fullscreen; clipboard-read; clipboard-write"></iframe>`);
+  const f = el(`<iframe class="webpane" title="${esc(id)}" allow="fullscreen; clipboard-read; clipboard-write; autoplay"></iframe>`);
+  api.get(`/api/facets/${encodeURIComponent(id)}/port`)
+    .then(r => { f.src = `${location.protocol}//${location.hostname}:${r.port}/`; })
+    .catch(() => { f.src = `/facet/${encodeURIComponent(id)}/`; });
+  return f;
+}
+// Open a hosted app: start it if it's stopped, and when it's a launcher that
+// waits for answers in a terminal (a pty), show that terminal, since a page
+// isn't there until it's answered.
+async function openHosted(id) {
+  await loadServices();
+  const f = facets.find(x => x.id === id); if (!f) return;
+  const pol = /face-stream/.test(f.command || '');
+  let running = f.state === 'running' || f.state === 'foreign';
+  if (!running) {
+    if (!(f.state === 'stopped' || f.state === 'failed') || !f.available) { toast(f.unavailable_because || `${f.name} isn't running.`, true); return; }
+    toast(`Starting ${f.name}…`);
+    try { await api.post(`/api/facets/${f.id}/start`); } catch (e) { toast(`${f.name} didn't start: ${e.message}`, true); return; }
+  }
+  if (f.pty) {
+    const sess = (await api.get('/api/term').catch(() => ({ sessions: [] }))).sessions.find(s => s.title === f.name && !s.exited);
+    if (sess && !(await answers(f))) {
+      toast(`${f.name} is asking something in its terminal. Answer it there; its page opens once it's up.`);
+      openApp('terminal', { sid: sess.id });
+      watchUp(f);
+      return;
+    }
+  } else if (!running) {
+    await new Promise(r => setTimeout(r, pol ? 12000 : 2000));
+  }
+  openApp('web:' + f.id);
+}
+// Does the app's page answer yet?
+async function answers(f) {
+  try { const r = await fetch(`/facet/${encodeURIComponent(f.id)}/`, { method: 'HEAD', credentials: 'same-origin' }); return r.status < 500; } catch (e) { return false; }
+}
+function watchUp(f) {
+  let n = 0;
+  const t = setInterval(async () => {
+    if (++n > 120) return clearInterval(t);
+    if (await answers(f)) { clearInterval(t); toast(`${f.name} is up.`); openApp('web:' + f.id); }
+  }, 3000);
+}
+// What can be done with a service, wherever it shows (a tile, a row, a pane).
+function serviceMenu(f, x, y, after) {
+  const running = f.state === 'running', ext = f.state === 'foreign';
+  const done = () => { loadServices().then(() => { renderHosted(); after && after(); }); };
+  menu(x, y, [
+    f.expose && { label: running || ext ? 'Open' : 'Start and open', icon: 'globe', act: () => openHosted(f.id) },
+    !running && !ext && (f.state === 'stopped' || f.state === 'failed') && f.available && { label: 'Start', icon: 'play', act: async () => { try { await api.post(`/api/facets/${f.id}/start`); toast(`${f.name} is starting.`); } catch (e) { toast(e.message, true); } setTimeout(done, 1200); } },
+    running && { label: 'Restart', icon: 'again', act: async () => { try { await api.post(`/api/facets/${f.id}/stop`); await new Promise(r => setTimeout(r, 800)); await api.post(`/api/facets/${f.id}/start`); toast(`${f.name} restarted.`); } catch (e) { toast(e.message, true); } setTimeout(done, 1200); } },
+    f.pty && running && { label: 'Its terminal', icon: 'prompt', act: async () => { const sess = (await api.get('/api/term').catch(() => ({ sessions: [] }))).sessions.find(s => s.title === f.name && !s.exited); sess ? openApp('terminal', { sid: sess.id }) : toast(`${f.name} has no terminal open.`, true); } },
+    running && 'sep',
+    running && { label: 'Stop', icon: 'stop', danger: true, act: async () => { try { await api.post(`/api/facets/${f.id}/stop`); toast(`${f.name} stopped.`); closePane('web:' + f.id); } catch (e) { toast(e.message, true); } done(); } },
+    ext && { label: 'Started outside PRISM, so PRISM never stops it', disabled: true },
+  ]);
 }
 
 boot();

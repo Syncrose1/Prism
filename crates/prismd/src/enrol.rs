@@ -196,6 +196,10 @@ pub fn passwd(state_dir: &Path) -> anyhow::Result<()> {
 /// instruction, it is a riddle. If the service is running, just do it; if it is
 /// not, print the exact command rather than a description of one.
 fn apply_restart() {
+    // Never from a test: the tests enrol into throwaway directories, and
+    // restarting the real daemon under them is how a `cargo test` once
+    // restarted the live Prism (5 Oct).
+    if cfg!(test) { return; }
     let running = std::process::Command::new("systemctl")
         .args(["--user", "is-active", "--quiet", "prismd.service"])
         .status()

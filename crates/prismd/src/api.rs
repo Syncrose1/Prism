@@ -129,6 +129,8 @@ pub struct AppState {
     pub accounts: Arc<prism_core::config::AccountsConfig>,
     /// The file roots open to guests (`guests = true`).
     pub guest_roots: Arc<std::collections::HashSet<String>>,
+    /// Each hosted app's own port (`ports.rs`).
+    pub ports: crate::ports::Shared,
     /// The port Prism itself is serving on, so the discovery sweep does not
     /// offer the operator their own desktop as an app to add to it.
     pub port: u16,
@@ -171,6 +173,8 @@ pub fn router(state: AppState) -> Router {
         .merge(crate::facets_api::routes())
         .merge(crate::links_api::routes())
         .merge(crate::accounts::routes())
+        .merge(crate::ports::routes())
+        .merge(crate::solis::routes())
         .merge(crate::workspace::routes())
         .merge(crate::proxy::routes())
         .route("/", get(crate::ui::index))
@@ -669,6 +673,10 @@ async fn audit(
         ("/api/auth/console", _) => {}
         // Signs itself in the log, with the account's own name (accounts.rs).
         ("/api/auth/account", _) => {}
+        // Layout and a terminal's size aren't anything anyone changed on the
+        // PC: kept out of the record of who came in and what they did.
+        ("/api/workspace", _) => {}
+        (p, _) if p.starts_with("/api/term/") && p.ends_with("/resize") => {}
         (p, m) if *m != axum::http::Method::GET && *m != axum::http::Method::HEAD && p.starts_with("/api/") => {
             let who = if ok_bridge { "polaris" } else { "admin" };
             let how = if ok_bridge { "bridge" } else { "session" };
@@ -684,13 +692,20 @@ async fn audit(
 #[derive(Deserialize)]
 struct AccessQuery {
     who: Option<String>,
+    /// Only this kind: signedin, refused, changed, signedout.
+    kind: Option<String>,
     limit: Option<usize>,
 }
 
 /// The access log, newest first, with whether its chain is intact.
 async fn access(State(state): State<AppState>, headers: HeaderMap, Query(q): Query<AccessQuery>) -> Response {
     if let Some(r) = require(&state, &headers, Sensitivity::Session) { return r }
-    let entries = state.access.recent(q.limit.unwrap_or(200).min(2000), q.who.as_deref());
+    let limit = q.limit.unwrap_or(200).min(2000);
+    let mut entries = state.access.recent(if q.kind.is_some() { 5000 } else { limit }, q.who.as_deref());
+    if let Some(k) = &q.kind {
+        entries.retain(|e| serde_json::to_value(e.kind).ok().and_then(|v| v.as_str().map(|s| s == k)).unwrap_or(false));
+        entries.truncate(limit);
+    }
     Json(serde_json::json!({ "verified": state.access.verify(), "entries": entries })).into_response()
 }
 

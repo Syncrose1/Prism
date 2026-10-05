@@ -21,6 +21,8 @@ mod facets_api;
 mod files_api;
 mod links_api;
 mod accounts;
+mod ports;
+mod solis;
 mod media;
 mod proxy;
 mod rescue;
@@ -235,6 +237,8 @@ async fn serve(
     nvenc: bool,
 ) -> anyhow::Result<()> {
     let plan = bind::resolve(&host.server.bind, host.server.port)?;
+    let ports_state: crate::ports::Shared = std::sync::Arc::new(std::sync::Mutex::new(crate::ports::Ports { ips: plan.now.iter().map(|a| a.ip()).collect(), base: host.server.port, ..Default::default() }));
+    let ports_late = ports_state.clone();
     let port = host.server.port;
     let overlay_events = Arc::clone(&events);
     // The console key exists from the first start, so `prismd open` never has a
@@ -266,6 +270,7 @@ async fn serve(
         links: std::sync::Arc::new(std::sync::Mutex::new(prism_core::links::Store::load(&state_dir))),
         accounts: std::sync::Arc::new(host.accounts.clone()),
         guest_roots: std::sync::Arc::new(host.files.roots.iter().filter(|r| r.guests).map(|r| r.name.clone()).collect()),
+        ports: ports_state.clone(),
         grants: std::sync::Arc::new(prism_core::auth::console::Grants::new()),
         vitals,
         facets,
@@ -309,6 +314,7 @@ async fn serve(
                         Ok(l) => {
                             info!(%addr, "the overlay is up: prism os listening at http://{addr}/");
                             overlay_events.push(prism_core::events::Level::Info, "prism", format!("the overlay came up: listening on {addr}"));
+                            if let Ok(mut p) = ports_late.lock() { p.ips.push(addr.ip()); }
                             inner.spawn(serve_on(l, app.clone()));
                         }
                         Err(e) => warn!(%addr, error = %e, "couldn't listen on the overlay"),

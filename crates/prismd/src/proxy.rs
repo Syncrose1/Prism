@@ -58,6 +58,17 @@ const HOP_BY_HOP: &[&str] = &[
     "upgrade",
 ];
 
+/// An app at the root of its own Prism port (`ports.rs`): every path is the
+/// app's, so absolute URLs and websockets need nothing rewritten.
+pub async fn at_root(State(state): State<AppState>, axum::Extension(id): axum::Extension<OwnPort>, req: Request) -> Response {
+    let path = req.uri().path().trim_start_matches('/').to_string();
+    proxy(State(state), id.0, path, req, false).await
+}
+
+/// Which facet a port serves.
+#[derive(Clone)]
+pub struct OwnPort(pub String);
+
 pub fn routes() -> Router<AppState> {
     Router::new()
         // Three forms, because a wildcard does not match an empty segment and
@@ -149,7 +160,7 @@ async fn forward_root(
 ) -> Response {
     // `/facet/x` and `/facet/x/` must behave the same, or a relative URL from
     // the app resolves against the wrong parent.
-    proxy(state, id, String::new(), req).await
+    proxy(state, id, String::new(), req, true).await
 }
 
 async fn forward(
@@ -172,18 +183,23 @@ async fn forward(
         .map(|rest| rest.trim_start_matches('/'))
         .unwrap_or("")
         .to_string();
-    proxy(state, id, path, req).await
+    proxy(state, id, path, req, true).await
 }
 
 fn err(status: StatusCode, detail: impl Into<String>) -> Response {
     (status, detail.into()).into_response()
 }
 
+/// Forward one request to the app. [prefixed]: served under `/facet/<id>/`
+/// (rewrite the page's base, redirects and cookies to the prefix); otherwise
+/// served at the root of the app's own Prism port, where nothing needs
+/// rewriting and absolute paths simply work.
 async fn proxy(
     State(state): State<AppState>,
     id: String,
     path: String,
     req: Request,
+    prefixed: bool,
 ) -> Response {
     // A proxied app is arbitrary local software; reaching it needs the same
     // session as anything else Prism exposes.
@@ -219,7 +235,7 @@ async fn proxy(
         Err(e) => return err(StatusCode::BAD_REQUEST, e.to_string()),
     };
 
-    let prefix = format!("/facet/{id}");
+    let prefix = if prefixed { format!("/facet/{id}") } else { String::new() };
     let is_upgrade = req
         .headers()
         .get(header::UPGRADE)
@@ -302,7 +318,7 @@ async fn proxy(
 
     // Cookies the app sets need adjusting for the fact that it is being served
     // from somewhere other than where it thinks.
-    rewrite_cookies(&mut parts.headers, &prefix);
+    if prefixed { rewrite_cookies(&mut parts.headers, &prefix); }
 
     let is_html = parts
         .headers
@@ -310,7 +326,7 @@ async fn proxy(
         .and_then(|v| v.to_str().ok())
         .is_some_and(|v| v.starts_with("text/html"));
 
-    if !is_html {
+    if !is_html || !prefixed {
         return Response::from_parts(parts, Body::new(body));
     }
 
@@ -473,7 +489,7 @@ fn inject_base(html: &[u8], prefix: &str) -> Vec<u8> {
 /// Both connections are upgraded and the raw byte streams joined. Nothing in
 /// between interprets frames: terminal traffic, ComfyUI's progress stream and
 /// Jellyfin's playback events all rely on the payload arriving exactly as sent.
-async fn upgrade(req: Request, target: Uri, port: u16) -> Response {
+pub(crate) async fn upgrade(req: Request, target: Uri, port: u16) -> Response {
     let (mut parts, body) = req.into_parts();
     parts.uri = target;
     parts.headers.remove(header::HOST);
