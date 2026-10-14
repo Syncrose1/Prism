@@ -44,6 +44,7 @@ pub fn routes() -> Router<AppState> {
         .route("/rescue/kill", post(kill))
         .route("/rescue/facet/stop", post(stop_facet))
         .route("/rescue/remedy", post(remedy))
+        .route("/rescue/reboot", post(reboot))
 }
 
 /// Shared page chrome. Duplicated rather than imported from the shell on
@@ -329,6 +330,13 @@ async fn page(State(state): State<AppState>, headers: HeaderMap) -> Response {
 <input type="hidden" name="action" value="restart_shell">
 <button type="submit">Restart desktop shell (quickshell)</button></form>"#,
     );
+    // The last resort, typed to be meant. Whether Prism comes back by
+    // itself depends on the user's services starting at boot (linger).
+    let back = if lingers() { "Prism starts again by itself when the PC is back, so this page will answer again." } else { "<b>Prism won't be back until someone signs in at the PC</b>: this user's services don't start at boot (<code>loginctl enable-linger</code> fixes that)." };
+    let _ = write!(html, r#"<form method="post" action="/rescue/reboot" class="reboot">
+<p class="note">Restart this PC. Everything running stops. {back}</p>
+<input type="text" name="confirm" placeholder="type reboot" autocomplete="off" aria-label="Type reboot to confirm">
+<button type="submit">Restart this PC</button></form>"#);
 
     // --- what happened lately: the timeline, newest first ---------------
     let recent = state.events.recent(15);
@@ -457,6 +465,52 @@ async fn remedy(
         other => warn!(action = %other, "rescue: unknown remedy"),
     }
     Redirect::to("/rescue").into_response()
+}
+
+#[derive(Deserialize)]
+struct RebootForm {
+    #[serde(default)]
+    confirm: String,
+}
+
+/// Whether this user's services start at boot without anyone signing in.
+fn lingers() -> bool {
+    let user = std::env::var("USER").unwrap_or_default();
+    std::process::Command::new("loginctl").args(["show-user", &user, "-p", "Linger", "--value"]).output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "yes").unwrap_or(false)
+}
+
+/// **Restart the PC** (ADR 0002's last item): only when "reboot" is typed;
+/// recorded in the timeline and the sealed access log; the page answers
+/// before the restart begins. `PRISM_DRY_REBOOT=1` runs systemd's dry run
+/// instead, for trying it without restarting anything.
+async fn reboot(State(state): State<AppState>, headers: HeaderMap, axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>, Form(form): Form<RebootForm>) -> Response {
+    if !signed_in(&state, &headers) {
+        return login_page(None);
+    }
+    if !form.confirm.trim().eq_ignore_ascii_case("reboot") {
+        return html_response(format!("{HEAD}<h1>Not restarted</h1><p>Type <code>reboot</code> in the box to restart this PC.</p><p><a href=\"/rescue\">Back</a></p></body></html>"));
+    }
+    let dry = std::env::var("PRISM_DRY_REBOOT").is_ok_and(|v| v == "1");
+    let now = prism_core::auth::totp::now_unix();
+    let _ = state.access.append(prism_core::access::Kind::Changed, prism_core::access::Access { who: "admin".into(), for_account: None, how: "rescue".into(), from: peer.ip().to_string(), what: if dry { "restart this PC (a dry run)".into() } else { "restart this PC".into() } }, now);
+    state.events.push(prism_core::events::Level::Action, "rescue", if dry { "restart asked from the rescue page (a dry run)".to_string() } else { "restarting the PC, as asked from the rescue page".to_string() });
+    warn!(dry, "rescue: restart requested");
+    let events = std::sync::Arc::clone(&state.events);
+    std::thread::spawn(move || {
+        // The answer reaches the browser first.
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        let mut cmd = std::process::Command::new("systemctl");
+        if dry { cmd.arg("--dry-run"); }
+        cmd.arg("reboot");
+        match cmd.output() {
+            Ok(o) if o.status.success() => { if dry { events.push(prism_core::events::Level::Info, "rescue", "the restart would have gone ahead (dry run)".to_string()); } }
+            Ok(o) => events.push_detailed(prism_core::events::Level::Error, "rescue", "the PC refused to restart".to_string(), Some(String::from_utf8_lossy(&o.stderr).trim().to_string())),
+            Err(e) => events.push_detailed(prism_core::events::Level::Error, "rescue", "couldn't ask the PC to restart".to_string(), Some(e.to_string())),
+        }
+    });
+    let back = if lingers() { "Prism starts again by itself, so this page will answer again in a minute or two." } else { "Prism won't answer until someone signs in at the PC." };
+    html_response(format!("{HEAD}<h1>Restarting</h1><p>{}</p><p class=\"note\">{back}</p><p><a href=\"/rescue\">Back to the rescue page</a></p></body></html>", if dry { "A dry run: nothing restarts." } else { "This PC is restarting. This page stops answering now." }))
 }
 
 #[cfg(test)]

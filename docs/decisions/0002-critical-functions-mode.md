@@ -140,6 +140,9 @@ written last and least carefully.
   timeline events, and offers Stop only on services that are running.
 * Picture previews step down with thumbnails: at Red the original is sent,
   nothing is made.
-* Left from the list above: reboot behind a confirmation (the person's to
-  ask for).
+* Reboot, behind typing `reboot` (14 Oct): recorded in the timeline and
+  the sealed access log, answered before the restart begins, and saying
+  whether Prism will be back by itself (the user's services start at boot
+  only with linger). `PRISM_DRY_REBOOT=1` runs systemd's dry run instead;
+  tried that way, never for real.
 
