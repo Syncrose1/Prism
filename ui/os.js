@@ -398,11 +398,16 @@ const APPS = {
   solis: { name: 'Solis', c: '#1F2A3A', icon: 'star', build: solisApp, flush: true },
 };
 let facets = [];
+// A service's own picture (its config names one; PRISM serves it), light
+// and dark, the theme choosing which shows.
+const imgOf = f => `<span class="ico"><img class="lt" alt="" src="/api/facets/${encodeURIComponent(f.id)}/icon">${f.expose?.icon_dark ? `<img class="dk" alt="" src="/api/facets/${encodeURIComponent(f.id)}/icon?dark=1">` : ''}</span>`;
+// A small mark for an App or service: its picture, else its pictogram on its colour.
+const tkOf = a => a.img ? `<span class="tk img">${imgOf(a.img)}</span>` : `${tkOf(a)}`;
 function appOf(id) {
   if (id.startsWith('web:')) {
     const f = facets.find(x => x.id === id.slice(4));
     const pol = f && /face-stream/.test(f.command || '');
-    return { name: f ? (f.expose?.title || f.name) : id.slice(4), c: pol ? '#7C5CE0' : '#2E71C8', icon: 'globe', build: webApp, flush: true, pol };
+    return { name: f ? (f.expose?.title || f.name) : id.slice(4), c: pol ? '#7C5CE0' : '#2E71C8', icon: 'globe', build: webApp, flush: true, pol, img: f?.expose?.icon ? f : null };
   }
   return APPS[id];
 }
@@ -493,8 +498,8 @@ function renderHosted() {
   box.innerHTML = ''; if (pbox) pbox.innerHTML = '';
   const tile = (f, i, into) => {
     const p = isPol(f), running = f.state === 'running' || f.state === 'foreign';
-    const face = p ? `<span class="mono">${esc(titleOf(f).split(/\s+/).map(w => w[0]).join('').slice(0, 2))}</span><span class="pstar">${svg('star')}</span>` : svg('globe');
-    const b = el(`<button class="tile" data-facet="${esc(f.id)}"><span class="m" style="--c:${p ? polColour(titleOf(f)) : running ? '#2E9E62' : '#9A978F'};--d:${(3 + i * 0.35).toFixed(2)}s">${face}</span>${esc(titleOf(f))}<small>${running ? (p ? 'open now' : 'running') : p ? 'opens live' : 'stopped'}</small></button>`);
+    const face = f.expose?.icon ? imgOf(f) + (p ? `<span class="pstar">${svg('star')}</span>` : '') : p ? `<span class="mono">${esc(titleOf(f).split(/\s+/).map(w => w[0]).join('').slice(0, 2))}</span><span class="pstar">${svg('star')}</span>` : svg('globe');
+    const b = el(`<button class="tile" data-facet="${esc(f.id)}"><span class="m${f.expose?.icon ? ' img' : ''}" style="--c:${p ? polColour(titleOf(f)) : running ? '#2E9E62' : '#9A978F'};--d:${(3 + i * 0.35).toFixed(2)}s">${face}</span>${esc(titleOf(f))}<small>${running ? (p ? 'open now' : 'running') : p ? 'opens live' : 'stopped'}</small></button>`);
     b.addEventListener('click', () => openHosted(f.id));
     b.addEventListener('contextmenu', ev => { ev.preventDefault(); serviceMenu(f, ev.clientX, ev.clientY); });
     into.appendChild(b);
@@ -681,7 +686,7 @@ function paneMenu(p, x, y) {
 }
 function makePane(p) {
   const a = appOf(p.id);
-  const e = el(`<section class="pane" data-app="${esc(p.id)}"><div class="phead"><span class="tk" style="background:${a.c}">${svg(a.icon)}</span><h2>${esc(a.name)}</h2><button class="b solo" title="Only this one" aria-label="Only ${esc(a.name)}">${svg('solo', 'currentColor', 2.4)}</button><button class="b x" aria-label="Close ${esc(a.name)}">${svg('x', 'currentColor', 2.6)}</button></div><div class="pbody${a.flush ? ' flush' : ''}"></div><span class="grip" aria-hidden="true"></span></section>`);
+  const e = el(`<section class="pane" data-app="${esc(p.id)}"><div class="phead">${tkOf(a)}<h2>${esc(a.name)}</h2><button class="b solo" title="Only this one" aria-label="Only ${esc(a.name)}">${svg('solo', 'currentColor', 2.4)}</button><button class="b x" aria-label="Close ${esc(a.name)}">${svg('x', 'currentColor', 2.6)}</button></div><div class="pbody${a.flush ? ' flush' : ''}"></div><span class="grip" aria-hidden="true"></span></section>`);
   const body = e.querySelector('.pbody');
   body.appendChild(a.build(p.args, body, p));
   e.__close = () => body.__close && body.__close();
@@ -787,7 +792,7 @@ function renderStrip() {
   if (state.panes.length) s.appendChild(el('<span class="sep"></span>'));
   state.panes.forEach(p => {
     const a = appOf(p.id); if (!a) return;
-    const b = el(`<button class="chip${state.scene === 'work' && p.id === state.focus ? ' on' : ''}"><span class="tk" style="background:${a.c}">${svg(a.icon)}</span>${esc(a.name)}<span class="x" role="button" aria-label="Close ${esc(a.name)}">${svg('x', 'currentColor', 3)}</span></button>`);
+    const b = el(`<button class="chip${state.scene === 'work' && p.id === state.focus ? ' on' : ''}">${tkOf(a)}${esc(a.name)}<span class="x" role="button" aria-label="Close ${esc(a.name)}">${svg('x', 'currentColor', 3)}</span></button>`);
     b.addEventListener('click', ev => { if (ev.target.closest('.x')) { closePane(p.id); return; } if (state.scene !== 'work') showScene('work'); setFocus(p.id); });
     b.addEventListener('contextmenu', ev => { ev.preventDefault(); paneMenu(p, ev.clientX, ev.clientY); });
     s.appendChild(b);
@@ -804,7 +809,7 @@ function openSheet() {
   const all = [...Object.keys(APPS).filter(allowed), ...(state.role === 'guest' ? [] : facets).filter(f => f.expose).map(f => 'web:' + f.id)];
   all.forEach(id => {
     const a = appOf(id);
-    const b = el(`<button><span class="m" style="--c:${a.c}">${svg(a.icon)}</span>${esc(a.name)}</button>`);
+    const b = el(`<button><span class="m${a.img ? ' img' : ''}" style="--c:${a.c}">${a.img ? imgOf(a.img) : svg(a.icon)}</span>${esc(a.name)}</button>`);
     if (state.scene === 'work' && state.panes.some(p => p.id === id)) b.disabled = true;
     b.addEventListener('click', () => { closeSheet('#open'); id.startsWith('web:') ? openHosted(id.slice(4)) : openApp(id); }); row.appendChild(b);
   });

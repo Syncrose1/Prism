@@ -355,6 +355,12 @@ pub struct Expose {
     /// which an app bound to loopback is not.
     #[serde(default)]
     pub direct: bool,
+    /// An image for its tile (png, svg, jpg, webp), and one for dark themes.
+    /// Paths on this machine; Prism serves them, the browser never reads disk.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon_dark: Option<PathBuf>,
 }
 
 /// Resource ceilings, all optional.

@@ -28,6 +28,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/facets", get(list).post(create))
         .route("/api/facets/{id}", axum::routing::delete(remove).put(update))
         .route("/api/facets/{id}/start", post(start))
+        .route("/api/facets/{id}/icon", get(icon))
         .route("/api/facets/{id}/stop", post(stop))
         .route("/api/facets/{id}/kill", post(kill))
         .route("/api/facets/{id}/limits", post(set_limits))
@@ -90,6 +91,9 @@ struct ExposeView {
     port: u16,
     title: String,
     direct: bool,
+    /// Whether it has its own image (served at `/api/facets/{id}/icon`).
+    icon: bool,
+    icon_dark: bool,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -167,6 +171,8 @@ fn view(facet: &Facet, sup: &Supervisor) -> FacetView {
             port: e.port,
             title: e.title.clone().unwrap_or_else(|| facet.name.clone()),
             direct: e.direct,
+            icon: e.icon.as_ref().is_some_and(|p| p.is_file()),
+            icon_dark: e.icon_dark.as_ref().is_some_and(|p| p.is_file()),
         }),
         available: gate.is_satisfied(),
         unavailable_because: match gate {
@@ -219,6 +225,11 @@ struct CreateRequest {
     /// A port this workload serves its own web interface on.
     #[serde(default)]
     expose: Option<u16>,
+    /// An image for its tile, and one for dark themes (paths on this machine).
+    #[serde(default)]
+    icon: Option<String>,
+    #[serde(default)]
+    icon_dark: Option<String>,
     #[serde(default)]
     limits: LimitsView,
 }
@@ -348,6 +359,8 @@ async fn create(
             title: body.title.clone().filter(|t| !t.trim().is_empty()),
             tls: body.tls,
             direct: false,
+            icon: body.icon.clone().filter(|p| !p.trim().is_empty()).map(std::path::PathBuf::from),
+            icon_dark: body.icon_dark.clone().filter(|p| !p.trim().is_empty()).map(std::path::PathBuf::from),
         }),
         pty: body.pty,
     };
@@ -426,6 +439,8 @@ async fn update(
             title: body.title.clone().filter(|t| !t.trim().is_empty()),
             tls: body.tls,
             direct: f.expose.as_ref().is_some_and(|e| e.direct),
+            icon: body.icon.clone().filter(|p| !p.trim().is_empty()).map(std::path::PathBuf::from).or_else(|| f.expose.as_ref().and_then(|e| e.icon.clone())),
+            icon_dark: body.icon_dark.clone().filter(|p| !p.trim().is_empty()).map(std::path::PathBuf::from).or_else(|| f.expose.as_ref().and_then(|e| e.icon_dark.clone())),
         });
         f.clone()
     };
@@ -557,6 +572,26 @@ async fn start(
             warn!(facet = %id, error = %e, "facet start failed");
             err(StatusCode::INTERNAL_SERVER_ERROR, "start_failed", e.to_string())
         }
+    }
+}
+
+/// A service's tile image (`?dark=1` for its dark one, falling back to the
+/// light). Only the files the service's own config names are ever read.
+async fn icon(State(state): State<AppState>, Path(id): Path<String>, headers: HeaderMap, axum::extract::RawQuery(q): axum::extract::RawQuery) -> Response {
+    if let Some(d) = require(&state, &headers, Sensitivity::Session) { return d }
+    let dark = q.as_deref().is_some_and(|q| q.split('&').any(|p| p == "dark=1"));
+    let Some(f) = find(&state, &id) else { return err(StatusCode::NOT_FOUND, "no_facet", "no such facet") };
+    let Some(e) = f.expose.as_ref() else { return err(StatusCode::NOT_FOUND, "no_icon", "no icon") };
+    let path = if dark { e.icon_dark.as_ref().filter(|p| p.is_file()).or(e.icon.as_ref()) } else { e.icon.as_ref() };
+    let Some(path) = path.filter(|p| p.is_file()) else { return err(StatusCode::NOT_FOUND, "no_icon", "no icon") };
+    let kind = match path.extension().and_then(|x| x.to_str()).map(|x| x.to_ascii_lowercase()).as_deref() {
+        Some("png") => "image/png", Some("svg") => "image/svg+xml", Some("jpg") | Some("jpeg") => "image/jpeg", Some("webp") => "image/webp",
+        _ => return err(StatusCode::UNSUPPORTED_MEDIA_TYPE, "not_an_image", "an icon is a png, svg, jpg or webp"),
+    };
+    match tokio::fs::read(path).await {
+        Ok(b) if b.len() <= 2 << 20 => ([(axum::http::header::CONTENT_TYPE, kind), (axum::http::header::CACHE_CONTROL, "private, max-age=3600")], b).into_response(),
+        Ok(_) => err(StatusCode::PAYLOAD_TOO_LARGE, "too_big", "an icon is at most 2 MB"),
+        Err(e) => err(StatusCode::NOT_FOUND, "unreadable", e.to_string()),
     }
 }
 

@@ -124,6 +124,8 @@ fn detect_facets() -> Vec<Facet> {
                     title: Some("ComfyUI".into()),
                     tls: false,
                     direct: false,
+                    icon: None,
+                    icon_dark: None,
                 }),
                 pty: interactive,
                 // ComfyUI's default policy is to keep weights on the host and

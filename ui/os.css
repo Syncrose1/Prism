@@ -579,3 +579,14 @@ button.pill { cursor: pointer; }
 .critical .b { width: 28px; height: 28px; border-radius: 50%; border: 0; background: transparent; color: var(--ink-soft); display: grid; place-items: center; cursor: pointer; }
 .critical .b svg { width: 12px; height: 12px; }
 @media (max-width: 640px) { .critical { flex-wrap: wrap; } }
+
+/* A service's own picture: fills its tile; the theme picks light or dark */
+.ico { display: block; width: 100%; height: 100%; }
+.ico img { width: 100%; height: 100%; object-fit: cover; display: block; border-radius: inherit; }
+.ico .dk { display: none; }
+:root[data-theme="ash"] .ico:has(.dk) .lt { display: none; }
+:root[data-theme="ash"] .ico .dk { display: block; }
+.m.img { background: var(--mount); padding: 0; }
+.m.img .ico { border-radius: calc(var(--radius) - var(--mountw)); overflow: hidden; }
+.tk.img { background: transparent; padding: 0; overflow: hidden; }
+.tk.img .ico img { border-radius: inherit; }
