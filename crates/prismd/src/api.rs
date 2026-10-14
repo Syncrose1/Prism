@@ -191,6 +191,7 @@ pub fn router(state: AppState) -> Router {
         .merge(crate::links_api::routes())
         .merge(crate::accounts::routes())
         .merge(crate::ports::routes())
+        .merge(crate::search_api::routes())
         .merge(crate::solis::routes())
         .merge(crate::workspace::routes())
         .merge(crate::proxy::routes())
@@ -665,7 +666,7 @@ async fn audit(
         && !path.starts_with("/l/") && path != "/rescue" {
         // And only in the folders opened to guests.
         let root = req.uri().query().unwrap_or("").split('&').find_map(|p| p.strip_prefix("root=")).map(|r| r.replace("%20", " "));
-        let in_guest_root = path == "/api/files/roots" || !path.starts_with("/api/files/") || root.is_some_and(|r| state.guest_roots.contains(&r));
+        let in_guest_root = path == "/api/files/roots" || path == "/api/files/search" || !path.starts_with("/api/files/") || root.is_some_and(|r| state.guest_roots.contains(&r));
         if !crate::accounts::guest_may(&method, &path) || !in_guest_root {
             return err_json(StatusCode::FORBIDDEN, "guest", "a guest can look at the folders opened to guests, and nothing more");
         }

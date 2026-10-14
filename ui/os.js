@@ -402,7 +402,7 @@ let facets = [];
 // and dark, the theme choosing which shows.
 const imgOf = f => `<span class="ico"><img class="lt" alt="" src="/api/facets/${encodeURIComponent(f.id)}/icon">${f.expose?.icon_dark ? `<img class="dk" alt="" src="/api/facets/${encodeURIComponent(f.id)}/icon?dark=1">` : ''}</span>`;
 // A small mark for an App or service: its picture, else its pictogram on its colour.
-const tkOf = a => a.img ? `<span class="tk img">${imgOf(a.img)}</span>` : `${tkOf(a)}`;
+const tkOf = a => a.img ? `<span class="tk img">${imgOf(a.img)}</span>` : `<span class="tk" style="background:${a.c}">${svg(a.icon)}</span>`;
 function appOf(id) {
   if (id.startsWith('web:')) {
     const f = facets.find(x => x.id === id.slice(4));
@@ -1573,6 +1573,102 @@ function solisApp(args, body) {
   body.__close = () => { closed = true; ws?.close(); };
   return root;
 }
+
+/* ── Find anything (Ctrl+K) ───────────────────────────────────────────── */
+// One box for everything on this PC: Apps, POLARIS's Apps and the services
+// PRISM hosts, a few actions, and files by name across every shared folder
+// (search_api.rs: the system's file index where there is one, a short live
+// walk for what's newer). Arrows and Enter; Esc closes.
+let finder = null;
+function find(on) {
+  if (!signedIn) return;
+  if (!finder) {
+    finder = el(`<div class="finder" role="dialog" aria-label="Find anything"><div class="fbox"><label class="fin">${svg('search', 'currentColor', 2.4)}<input type="search" placeholder="Find an App, a file, a service or something to do" aria-label="Find" autocomplete="off" spellcheck="false"><kbd>Esc</kbd></label><div class="fres" role="listbox"></div><p class="fhint">↑ ↓ to choose · Enter to open · files are found by name in every shared folder</p></div></div>`);
+    document.body.appendChild(finder);
+    const inp = finder.querySelector('input'), box = finder.querySelector('.fres');
+    let items = [], pick = 0, seqF = 0, timer = 0;
+    const close = () => find(false);
+    finder.addEventListener('pointerdown', e => { if (e.target === finder) close(); });
+    const go = it => { if (!it) return; close(); it.act(); };
+    const draw = () => {
+      box.innerHTML = '';
+      let group = '';
+      items.forEach((it, i) => {
+        if (it.group !== group) { group = it.group; box.appendChild(el(`<div class="fgroup">${esc(group)}</div>`)); }
+        const b = el(`<button class="fitem" role="option" aria-selected="${i === pick}">${it.mark}<span class="ft"><b>${esc(it.title)}</b>${it.sub ? `<small>${esc(it.sub)}</small>` : ''}</span>${it.hint ? `<kbd>${esc(it.hint)}</kbd>` : ''}</button>`);
+        b.addEventListener('click', () => go(it));
+        b.addEventListener('pointermove', () => { if (pick !== i) { pick = i; mark(); } });
+        box.appendChild(b);
+      });
+      if (!items.length) box.appendChild(el(`<div class="fnone">${inp.value.trim() ? 'Nothing found.' : 'Start typing.'}</div>`));
+    };
+    const mark = () => { box.querySelectorAll('.fitem').forEach((b, i) => b.setAttribute('aria-selected', String(i === pick))); box.querySelectorAll('.fitem')[pick]?.scrollIntoView({ block: 'nearest' }); };
+    const local = q => {
+      const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+      const hit = t => words.every(w => t.toLowerCase().includes(w));
+      const out = [];
+      for (const [id, a] of Object.entries(APPS)) if (allowed(id) && hit(a.name)) out.push({ group: 'Apps', title: a.name, mark: `<span class="tk" style="background:${a.c}">${svg(a.icon)}</span>`, act: () => openApp(id) });
+      if (state.role !== 'guest') for (const f of facets.filter(f => f.expose)) {
+        const pol = /face-stream/.test(f.command || '');
+        if (hit(titleOf(f)) || hit(f.name)) out.push({ group: pol ? 'POLARIS' : 'Hosted here', title: titleOf(f), sub: f.state === 'running' ? 'open now' : pol ? 'opens live' : 'starts it', mark: tkOf(appOf('web:' + f.id)), act: () => openHosted(f.id) });
+      }
+      if (state.role !== 'guest') for (const f of facets.filter(f => !f.expose)) if (hit(f.name)) out.push({ group: 'Services', title: f.name, sub: f.state, mark: `<span class="tk" style="background:#2E9E62">${svg('stack')}</span>`, act: () => openApp('services') });
+      const acts = [
+        { t: 'Tile the windows', k: 'tile tiling hyprland layout', a: () => setWM('tile'), i: 'tiles' },
+        { t: 'Float the windows', k: 'float floating windows layout', a: () => setWM('float'), i: 'windows' },
+        { t: 'Pearl (light)', k: 'pearl light theme look', a: () => $('#themeSeg [data-v=pearl]').click(), i: 'solo' },
+        { t: 'Ash (dark)', k: 'ash dark theme look night', a: () => $('#themeSeg [data-v=ash]').click(), i: 'solo' },
+        { t: 'Talk to Solis', k: 'solis ask chat assistant', a: () => toggleSolis(true), i: 'star' },
+        { t: 'Open the rescue page', k: 'rescue critical recovery emergency', a: () => { location.href = '/rescue'; }, i: 'shield' },
+        { t: 'Go Home', k: 'home', a: goHome, i: 'home' },
+        { t: 'Sign out', k: 'sign out log out leave lock', a: () => $('#signout').click(), i: 'x' },
+      ].filter(x => state.role !== 'guest' || ['Go Home', 'Sign out', 'Pearl (light)', 'Ash (dark)'].includes(x.t));
+      for (const x of acts) if (hit(x.t + ' ' + x.k)) out.push({ group: 'Do', title: x.t, mark: `<span class="tk" style="background:#5A5F68">${svg(x.i)}</span>`, act: x.a });
+      return out;
+    };
+    const fileItem = h => {
+      const [ic, c] = KIND_ICON[h.kind] || KIND_ICON.other;
+      const dir = h.path.split('/').slice(0, -1).join('/');
+      const act = h.is_dir ? () => openApp('files', { root: h.root, path: h.path })
+        : h.kind === 'image' ? () => openApp('photos', { root: h.root, dir, name: h.name })
+        : h.kind === 'video' || h.kind === 'audio' ? () => openApp('videos', { root: h.root, path: h.path, name: h.name })
+        : () => openApp('files', { root: h.root, path: dir });
+      return { group: 'Files', title: h.name, sub: `${h.root}${dir ? ' › ' + dir : ''}${h.modified ? ' · ' + ago(h.modified) : ''}`, mark: `<span class="tk" style="background:${c}">${svg(ic)}</span>`, act };
+    };
+    const run = () => {
+      const q = inp.value.trim(), my = ++seqF;
+      items = q ? local(q) : local('').filter(x => x.group === 'Do').slice(0, 5);
+      pick = 0; draw();
+      clearTimeout(timer);
+      if (q.length < 2) return;
+      timer = setTimeout(async () => {
+        box.classList.add('busy');
+        let hits = [];
+        try { hits = await api.get(`/api/files/search?${q2({ q, limit: 30 })}`); } catch (e) {}
+        if (my !== seqF) return;
+        box.classList.remove('busy');
+        items = items.filter(x => x.group !== 'Files').concat(hits.map(fileItem));
+        draw(); mark();
+      }, 180);
+    };
+    inp.addEventListener('input', run);
+    inp.addEventListener('keydown', e => {
+      if (e.key === 'ArrowDown') { pick = Math.min(items.length - 1, pick + 1); mark(); e.preventDefault(); }
+      else if (e.key === 'ArrowUp') { pick = Math.max(0, pick - 1); mark(); e.preventDefault(); }
+      else if (e.key === 'Enter') { go(items[pick]); e.preventDefault(); }
+      else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); }
+    });
+    finder.__run = run;
+  }
+  on = on ?? !finder.classList.contains('on');
+  finder.classList.toggle('on', on);
+  if (on) { const inp = finder.querySelector('input'); inp.value = ''; finder.__run(); setTimeout(() => inp.focus(), 30); }
+}
+const q2 = o => Object.entries(o).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&');
+$('#findBtn').addEventListener('click', () => find(true));
+document.addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === 'k' && signedIn) { e.preventDefault(); e.stopPropagation(); find(); }
+}, true);
 
 /* ── A service's own page, through PRISM ─────────────────────────────── */
 // Each hosted app is served at the root of a port of its own (ports.rs), so

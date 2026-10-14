@@ -27,6 +27,7 @@ mod solis;
 mod media;
 mod proxy;
 mod rescue;
+mod search_api;
 mod setup;
 mod term_api;
 mod ui;
