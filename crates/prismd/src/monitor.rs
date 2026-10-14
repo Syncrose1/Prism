@@ -220,7 +220,9 @@ impl Monitor {
                     // luxury a failing machine cannot afford.
                     crate::term_api::apply_tier(&self.terminals, tier);
                     self.terminals.reap();
-                    if tier < Tier::Red { self.pending = None; }
+                    // A pending action is judged by verify(), at any tier:
+                    // relief is exactly when the tier falls, so dropping it
+                    // here meant success was never recorded.
 
                     self.events.push_detailed(
                         match tier {
@@ -274,6 +276,7 @@ impl Monitor {
                         "pressure tier changed"
                     );
                 }
+                self.verify(now, &reading);
                 self.act(now, &reading);
             }
             Err(e) => error!(error = %e, "memory sample failed"),
@@ -317,19 +320,35 @@ impl Monitor {
     /// At Red and Black: judge the last action, then take the next one
     /// (prism_core::intervene holds the rules). Each is recorded as Prism's
     /// own hand in the timeline, and so is its verdict.
+    /// Judge the last action once its time has come, at whatever tier the
+    /// machine is in by then. Called every tick.
+    fn verify(&mut self, now: Instant, reading: &Reading) {
+        use prism_core::events::Level;
+        let overdraft = reading.vram_overdraft_mib.unwrap_or(0);
+        let Some(p) = &self.pending else { return };
+        let id = match &p.step { Step::Ask(id) | Step::Stop(id) => id.clone(), Step::Say(_) => String::new() };
+        // The run that was stopped ended: that was the action working, even
+        // if someone has started it again since (judging the new run by the
+        // old one's headroom would call a working stop a failure).
+        if matches!(p.step, Step::Stop(_)) && self.hands.ended_since_acted(&id) && now.duration_since(p.at) >= prism_core::intervene::VERIFY_AFTER {
+            self.events.push_detailed(Level::Info, "governor", format!("verified: `{id}` stopped"), Some(if self.uses.iter().any(|u| u.id == id && u.ours) { "it ended; it has been started again since".into() } else { format!("{:.1} GiB honest headroom now", reading.headroom_mib as f64 / 1024.0) }));
+            self.pending = None;
+            return;
+        }
+        let running = self.uses.iter().any(|u| u.id == id && u.ours);
+        match p.judge(now, running, reading.headroom_mib, overdraft) {
+            Verdict::Wait => return,
+            Verdict::Relieved(how) => { info!(facet = %id, %how, "intervention verified"); self.events.push_detailed(Level::Info, "governor", format!("verified: `{id}` relieved the pressure"), Some(if how.is_empty() { "the pressure is gone".into() } else { how })); }
+            Verdict::Failed(why) => { warn!(%why, "intervention did not relieve pressure"); self.events.push(Level::Warn, "governor", why); }
+        }
+        self.pending = None;
+    }
+
     fn act(&mut self, now: Instant, reading: &Reading) {
         use prism_core::events::Level;
         let overdraft = reading.vram_overdraft_mib.unwrap_or(0);
-        if let Some(p) = &self.pending {
-            let id = match &p.step { Step::Ask(id) | Step::Stop(id) => id.clone(), Step::Say(_) => String::new() };
-            let running = self.uses.iter().any(|u| u.id == id && u.ours);
-            match p.judge(now, running, reading.headroom_mib, overdraft) {
-                Verdict::Wait => return,
-                Verdict::Relieved(how) => { if !how.is_empty() { self.events.push_detailed(Level::Info, "governor", format!("verified: `{id}` relieved the pressure"), Some(how)); } }
-                Verdict::Failed(why) => { warn!(%why, "intervention did not relieve pressure"); self.events.push(Level::Warn, "governor", why); }
-            }
-            self.pending = None;
-        }
+        // The last action is judged first (verify): nothing new until then.
+        if self.pending.is_some() { return }
         let tier = self.governor.tier();
         let driver = self.governor.driver();
         let Some(step) = self.hands.decide(tier, driver, &self.uses, now) else { return };

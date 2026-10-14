@@ -73,10 +73,17 @@ pub struct Interventions {
     held: HashMap<String, Instant>,
     /// What has already been said this episode, so it is said once.
     said: Option<String>,
+    /// Facets that ended after being acted on: started again, they're a new
+    /// run, and the cooldown (meant for an action still working) is over.
+    ended: std::collections::HashSet<String>,
 }
 
 impl Interventions {
     pub fn new() -> Self { Self::default() }
+
+    /// Whether this facet ended after it was last acted on (what's running
+    /// under its name now, if anything, is a later run).
+    pub fn ended_since_acted(&self, id: &str) -> bool { self.ended.contains(id) }
 
     /// Remember this tick's memory, for growth. Called every tick, at any
     /// tier, so growth is known the moment pressure arrives.
@@ -87,6 +94,9 @@ impl Interventions {
             while h.front().is_some_and(|(t, _)| now.duration_since(*t) > GROWTH_WINDOW) { h.pop_front(); }
         }
         self.seen.retain(|id, _| uses.iter().any(|u| &u.id == id));
+        for id in self.acted.keys() {
+            if !uses.iter().any(|u| &u.id == id && u.memory_mib > 0) { self.ended.insert(id.clone()); }
+        }
     }
 
     /// MiB per minute over the window, never negative.
@@ -123,8 +133,13 @@ impl Interventions {
             None => Step::Say("pressure with no facet to attribute it to: nothing Prism launched is responsible, and nothing else is touched".into()),
             Some(u) if self.held.contains_key(&u.id) => Step::Say(format!("`{}` keeps needing intervention; automatic action on it has stopped", u.id)),
             Some(u) => {
+                // Waiting out an action still taking effect, but not for a
+                // run that began since: at Black, those seconds are the ones
+                // the machine falls over in (measured 14 Oct: 12 s at Black
+                // while a restarted workload waited out the cooldown).
                 let last = self.acted.get(&u.id).and_then(|a| a.back()).copied();
-                if last.is_some_and(|t| now.duration_since(t) < COOLDOWN) { return None }
+                if last.is_some_and(|t| now.duration_since(t) < COOLDOWN) && !self.ended.contains(&u.id) { return None }
+
                 let step = match (tier, u.ours, u.hook) {
                     (Tier::Black, true, _) => Step::Stop(u.id.clone()),
                     (_, _, true) => Step::Ask(u.id.clone()),
@@ -135,7 +150,9 @@ impl Interventions {
                     let a = self.acted.entry(u.id.clone()).or_default();
                     a.push_back(now);
                     while a.front().is_some_and(|t| now.duration_since(*t) > FLAP_WINDOW) { a.pop_front(); }
+                    // The third inside the window is the last (FLAP_LIMIT).
                     if a.len() >= FLAP_LIMIT { self.held.insert(u.id.clone(), now); }
+                    self.ended.remove(&u.id);
                 }
                 step
             }
@@ -268,6 +285,21 @@ mod tests {
         assert_eq!(i.decide(Tier::Red, Driver::Headroom, &uses, t + Duration::from_secs(250)), None);
         // Once the window clears, it may act again.
         assert_eq!(i.decide(Tier::Red, Driver::Headroom, &uses, t + Duration::from_secs(122 + 601)), Some(Step::Ask("comfy".into())));
+    }
+
+    #[test]
+    fn a_run_started_since_isnt_kept_waiting_by_the_cooldown() {
+        let mut i = Interventions::new();
+        let t = Instant::now();
+        let hog = [u("hog", true, false, 2000, 0)];
+        assert_eq!(i.decide(Tier::Black, Driver::Headroom, &hog, t), Some(Step::Stop("hog".into())));
+        // Still the same run, 20 s on: waiting for the stop to take effect.
+        i.sense(&hog, t + Duration::from_secs(20));
+        assert_eq!(i.decide(Tier::Black, Driver::Headroom, &hog, t + Duration::from_secs(20)), None);
+        // It ended, then someone started it again: a new run, stopped at once.
+        i.sense(&[], t + Duration::from_secs(25));
+        i.sense(&hog, t + Duration::from_secs(40));
+        assert_eq!(i.decide(Tier::Black, Driver::Headroom, &hog, t + Duration::from_secs(40)), Some(Step::Stop("hog".into())));
     }
 
     #[test]
